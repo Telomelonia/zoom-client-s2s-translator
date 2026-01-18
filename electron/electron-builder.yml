@@ -1,0 +1,80 @@
+appId: com.zoom-translator.app
+productName: Zoom S2S Translator
+copyright: Copyright © 2026
+
+directories:
+  output: dist-packages
+  buildResources: build
+
+# macOS Configuration
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  icon: build/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+
+# macOS DMG Configuration
+dmg:
+  title: ${productName} ${version}
+  icon: build/icon.icns
+  background: build/background.png
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 140
+      y: 180
+    - x: 400
+      y: 180
+      type: link
+      path: /Applications
+
+# Windows Configuration
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: build/icon.ico
+
+# NSIS Installer Configuration
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: ${productName}
+
+# Files to include
+files:
+  - dist/**/*
+  - package.json
+
+# Extra resources (Python backend)
+extraResources:
+  - from: ../python-dist/
+    to: python/
+    filter:
+      - "**/*"
+
+# Publish configuration (for auto-updates)
+publish:
+  provider: generic
+  url: https://example.com/updates
+
+# Compression
+compression: normal

@@ -1,0 +1,29 @@
+# Core Dependencies
+google-cloud-aiplatform>=1.38.0
+google-generativeai>=0.8.0
+
+# Audio Processing
+pyaudio>=0.2.14
+sounddevice>=0.4.6
+numpy>=1.26.0
+
+# Async and WebSocket
+websockets>=12.0
+aiohttp>=3.9.0
+
+# Configuration and Environment
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Development Dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+ruff>=0.1.0
+black>=23.0.0
+mypy>=1.7.0
+types-aiofiles>=23.2.0
+
+# Type stubs
+types-requests>=2.31.0
