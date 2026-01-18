@@ -3,9 +3,22 @@
 > **Start Here!** This is your step-by-step guide to building the Zoom S2S Translator.
 > Follow each task in order. Check the box when done.
 
+## Progress Overview
+
+| Phase | Status | Tasks |
+|-------|--------|-------|
+| 1. Project Setup | ✅ Complete | 5/5 |
+| 2. Audio Capture | 🚀 In Progress | 0/4 |
+| 3. Gemini Integration | Not Started | 0/2 |
+| 4. Full Integration | Not Started | 0/6 |
+
+**Next Task:** [Task 2.1: Implement Microphone Capture](#task-21-implement-microphone-capture--start-here)
+
 ---
 
-## Phase 1: Project Setup (START HERE)
+## Phase 1: Project Setup ✅ COMPLETE
+
+> **Status:** All tasks completed and code reviewed. Committed to main branch.
 
 ### Task 1.1: Create Electron Project Structure
 **What:** Set up the Electron (frontend) folder structure
@@ -136,9 +149,9 @@ contextBridge.exposeInMainWorld('api', {
 ```
 
 **Done when:**
-- [ ] All folders exist
-- [ ] All 5 files created
-- [ ] `cd electron && npm install` runs without errors
+- [x] All folders exist
+- [x] All 5 files created
+- [x] `cd electron && npm install` runs without errors
 
 ---
 
@@ -236,9 +249,9 @@ if __name__ == "__main__":
 ```
 
 **Done when:**
-- [ ] All folders exist
-- [ ] All 8 files created
-- [ ] `cd python && python -m venv venv && source venv/bin/activate && pip install -r requirements.txt` runs without errors
+- [x] All folders exist
+- [x] All 8 files created
+- [x] `cd python && python -m venv venv && source venv/bin/activate && pip install -r requirements.txt` runs without errors
 
 ---
 
@@ -287,8 +300,8 @@ chmod +x scripts/dev.sh
 ```
 
 **Done when:**
-- [ ] `.env.example` exists in root
-- [ ] `scripts/dev.sh` exists and is executable
+- [x] `.env.example` exists in root
+- [x] `scripts/dev.sh` exists and is executable
 
 ---
 
@@ -302,8 +315,10 @@ brew install blackhole-2ch
 ```
 
 **Done when:**
-- [ ] BlackHole appears in System Settings > Sound > Output devices
-- [ ] BlackHole appears in System Settings > Sound > Input devices
+- [ ] BlackHole appears in System Settings > Sound > Output devices *(user setup required)*
+- [ ] BlackHole appears in System Settings > Sound > Input devices *(user setup required)*
+
+> **Note:** Run `scripts/install-blackhole.sh` to install BlackHole on macOS.
 
 ---
 
@@ -327,85 +342,102 @@ npm run start
 ```
 
 **Done when:**
-- [ ] Python starts without errors
-- [ ] Electron window opens
+- [x] Python starts without errors
+- [x] Electron window opens
 
 ---
 
-## Phase 2: Audio Capture
+## Phase 2: Audio Capture 🚀 IN PROGRESS
 
-### Task 2.1: Implement Microphone Capture
+> **Status:** Now active. Implement the audio capture modules.
+
+### Task 2.1: Implement Microphone Capture ← START HERE
 **What:** Create a class that captures audio from the microphone
 
 **File to create:** `python/src/audio/microphone.py`
 
+> **Note:** Use the constants from `python/src/audio/__init__.py` which are already defined:
+> - `SAMPLE_RATE_MIC = 16000` (16kHz for Gemini API)
+> - `CHANNELS = 1` (mono)
+> - `CHUNK_SIZE = 1024` (frames per buffer)
+
 ```python
 """Microphone audio capture module."""
+from __future__ import annotations
+
 import pyaudio
-import numpy as np
-from typing import Generator
+from collections.abc import Generator
+
+from . import SAMPLE_RATE_MIC, CHANNELS, CHUNK_SIZE
+
 
 class MicrophoneCapture:
     """Captures audio from the microphone."""
 
-    SAMPLE_RATE = 16000  # 16kHz for Gemini API
-    CHANNELS = 1         # Mono
-    CHUNK_SIZE = 1024    # Frames per buffer
     FORMAT = pyaudio.paInt16  # 16-bit PCM
 
-    def __init__(self, device_index: int | None = None):
+    def __init__(self, device_index: int | None = None) -> None:
         self.device_index = device_index
-        self.audio = pyaudio.PyAudio()
-        self.stream = None
+        self._audio: pyaudio.PyAudio | None = None
+        self._stream: pyaudio.Stream | None = None
 
     def start(self) -> None:
         """Start capturing audio."""
-        self.stream = self.audio.open(
+        self._audio = pyaudio.PyAudio()
+        self._stream = self._audio.open(
             format=self.FORMAT,
-            channels=self.CHANNELS,
-            rate=self.SAMPLE_RATE,
+            channels=CHANNELS,
+            rate=SAMPLE_RATE_MIC,
             input=True,
             input_device_index=self.device_index,
-            frames_per_buffer=self.CHUNK_SIZE,
+            frames_per_buffer=CHUNK_SIZE,
         )
         print(f"Microphone capture started (device: {self.device_index})")
 
     def read_chunk(self) -> bytes:
         """Read one chunk of audio data."""
-        if self.stream is None:
-            raise RuntimeError("Stream not started")
-        return self.stream.read(self.CHUNK_SIZE, exception_on_overflow=False)
+        if self._stream is None:
+            raise RuntimeError("Stream not started. Call start() first.")
+        return self._stream.read(CHUNK_SIZE, exception_on_overflow=False)
 
     def stream_audio(self) -> Generator[bytes, None, None]:
-        """Generator that yields audio chunks."""
-        while self.stream and self.stream.is_active():
+        """Generator that yields audio chunks continuously."""
+        while self._stream and self._stream.is_active():
             yield self.read_chunk()
 
     def stop(self) -> None:
-        """Stop capturing audio."""
-        if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
-            self.stream = None
+        """Stop capturing audio and release resources."""
+        if self._stream:
+            self._stream.stop_stream()
+            self._stream.close()
+            self._stream = None
+        if self._audio:
+            self._audio.terminate()
+            self._audio = None
         print("Microphone capture stopped")
 
-    def __del__(self):
+    def __enter__(self) -> MicrophoneCapture:
+        """Context manager entry."""
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Context manager exit."""
         self.stop()
-        self.audio.terminate()
 
 
-def list_input_devices() -> list[dict]:
+def list_input_devices() -> list[dict[str, int | str]]:
     """List all available input (microphone) devices."""
     audio = pyaudio.PyAudio()
     devices = []
 
     for i in range(audio.get_device_count()):
         info = audio.get_device_info_by_index(i)
-        if info['maxInputChannels'] > 0:
+        if info["maxInputChannels"] > 0:
             devices.append({
-                'index': i,
-                'name': info['name'],
-                'channels': info['maxInputChannels'],
+                "index": i,
+                "name": info["name"],
+                "channels": info["maxInputChannels"],
             })
 
     audio.terminate()
@@ -419,15 +451,12 @@ if __name__ == "__main__":
         print(f"  [{dev['index']}] {dev['name']}")
 
     print("\nRecording 3 seconds...")
-    mic = MicrophoneCapture()
-    mic.start()
+    with MicrophoneCapture() as mic:
+        chunks = []
+        for _ in range(int(SAMPLE_RATE_MIC / CHUNK_SIZE * 3)):  # 3 seconds
+            chunks.append(mic.read_chunk())
 
-    chunks = []
-    for _ in range(int(16000 / 1024 * 3)):  # 3 seconds
-        chunks.append(mic.read_chunk())
-
-    mic.stop()
-    print(f"Recorded {len(chunks)} chunks")
+    print(f"Recorded {len(chunks)} chunks ({len(chunks) * CHUNK_SIZE / SAMPLE_RATE_MIC:.1f}s)")
 ```
 
 **Test it:**
@@ -449,39 +478,43 @@ python src/audio/microphone.py
 
 **File to create:** `python/src/audio/speaker.py`
 
+> **Note:** Use `SAMPLE_RATE_OUTPUT = 24000` from `__init__.py` for Gemini API output.
+
 ```python
 """Speaker audio output module."""
-import pyaudio
-import numpy as np
-from typing import Optional
-from queue import Queue
+from __future__ import annotations
+
 import threading
+from queue import Empty, Queue
+
+import pyaudio
+
+from . import SAMPLE_RATE_OUTPUT, CHANNELS, CHUNK_SIZE
+
 
 class SpeakerOutput:
-    """Plays audio through speakers."""
+    """Plays audio through speakers with buffered playback."""
 
-    SAMPLE_RATE = 24000  # 24kHz from Gemini API
-    CHANNELS = 1         # Mono
-    CHUNK_SIZE = 1024    # Frames per buffer
     FORMAT = pyaudio.paInt16  # 16-bit PCM
 
-    def __init__(self, device_index: int | None = None):
+    def __init__(self, device_index: int | None = None) -> None:
         self.device_index = device_index
-        self.audio = pyaudio.PyAudio()
-        self.stream = None
-        self.buffer: Queue[bytes] = Queue()
+        self._audio: pyaudio.PyAudio | None = None
+        self._stream: pyaudio.Stream | None = None
+        self._buffer: Queue[bytes] = Queue()
         self._running = False
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         """Start audio playback."""
-        self.stream = self.audio.open(
+        self._audio = pyaudio.PyAudio()
+        self._stream = self._audio.open(
             format=self.FORMAT,
-            channels=self.CHANNELS,
-            rate=self.SAMPLE_RATE,
+            channels=CHANNELS,
+            rate=SAMPLE_RATE_OUTPUT,
             output=True,
             output_device_index=self.device_index,
-            frames_per_buffer=self.CHUNK_SIZE,
+            frames_per_buffer=CHUNK_SIZE,
         )
         self._running = True
         self._thread = threading.Thread(target=self._playback_loop, daemon=True)
@@ -492,44 +525,53 @@ class SpeakerOutput:
         """Background thread that plays audio from buffer."""
         while self._running:
             try:
-                chunk = self.buffer.get(timeout=0.1)
-                if self.stream:
-                    self.stream.write(chunk)
-            except:
-                pass  # Queue timeout, continue
+                chunk = self._buffer.get(timeout=0.1)
+                if self._stream:
+                    self._stream.write(chunk)
+            except Empty:
+                continue  # Queue timeout, keep running
 
     def play(self, audio_data: bytes) -> None:
         """Add audio data to playback buffer."""
-        self.buffer.put(audio_data)
+        self._buffer.put(audio_data)
 
     def stop(self) -> None:
-        """Stop audio playback."""
+        """Stop audio playback and release resources."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=1)
-        if self.stream:
-            self.stream.stop_stream()
-            self.stream.close()
-            self.stream = None
+            self._thread = None
+        if self._stream:
+            self._stream.stop_stream()
+            self._stream.close()
+            self._stream = None
+        if self._audio:
+            self._audio.terminate()
+            self._audio = None
         print("Speaker output stopped")
 
-    def __del__(self):
+    def __enter__(self) -> SpeakerOutput:
+        """Context manager entry."""
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Context manager exit."""
         self.stop()
-        self.audio.terminate()
 
 
-def list_output_devices() -> list[dict]:
+def list_output_devices() -> list[dict[str, int | str]]:
     """List all available output (speaker) devices."""
     audio = pyaudio.PyAudio()
     devices = []
 
     for i in range(audio.get_device_count()):
         info = audio.get_device_info_by_index(i)
-        if info['maxOutputChannels'] > 0:
+        if info["maxOutputChannels"] > 0:
             devices.append({
-                'index': i,
-                'name': info['name'],
-                'channels': info['maxOutputChannels'],
+                "index": i,
+                "name": info["name"],
+                "channels": info["maxOutputChannels"],
             })
 
     audio.terminate()
@@ -540,32 +582,31 @@ def list_output_devices() -> list[dict]:
 if __name__ == "__main__":
     import math
     import struct
+    import time
 
     print("Available speakers:")
     for dev in list_output_devices():
         print(f"  [{dev['index']}] {dev['name']}")
 
     print("\nPlaying test tone (440Hz for 2 seconds)...")
-    speaker = SpeakerOutput()
-    speaker.start()
 
-    # Generate 440Hz sine wave
-    duration = 2.0
-    frequency = 440
-    samples = int(24000 * duration)
+    with SpeakerOutput() as speaker:
+        # Generate 440Hz sine wave
+        duration = 2.0
+        frequency = 440
+        samples = int(SAMPLE_RATE_OUTPUT * duration)
 
-    for i in range(0, samples, 1024):
-        chunk_samples = min(1024, samples - i)
-        chunk = b''
-        for j in range(chunk_samples):
-            t = (i + j) / 24000
-            value = int(16000 * math.sin(2 * math.pi * frequency * t))
-            chunk += struct.pack('<h', value)
-        speaker.play(chunk)
+        for i in range(0, samples, CHUNK_SIZE):
+            chunk_samples = min(CHUNK_SIZE, samples - i)
+            chunk = b""
+            for j in range(chunk_samples):
+                t = (i + j) / SAMPLE_RATE_OUTPUT
+                value = int(16000 * math.sin(2 * math.pi * frequency * t))
+                chunk += struct.pack("<h", value)
+            speaker.play(chunk)
 
-    import time
-    time.sleep(2.5)  # Wait for playback
-    speaker.stop()
+        time.sleep(2.5)  # Wait for playback to finish
+
     print("Done!")
 ```
 
@@ -589,16 +630,24 @@ python src/audio/speaker.py
 
 **File to create:** `python/src/audio/test_loopback.py`
 
+> **Warning:** The sample rate mismatch (16kHz mic → 24kHz speaker) will cause pitch shift.
+> This is expected for this test - the real Gemini pipeline outputs 24kHz audio.
+
 ```python
 """Test microphone to speaker loopback."""
-import time
-from microphone import MicrophoneCapture, list_input_devices
-from speaker import SpeakerOutput, list_output_devices
+from __future__ import annotations
 
-def main():
+import time
+
+from .microphone import MicrophoneCapture, list_input_devices
+from .speaker import SpeakerOutput, list_output_devices
+
+
+def main() -> None:
+    """Run loopback test."""
     print("=== Audio Loopback Test ===")
     print("This will play your microphone through your speakers.")
-    print("Wear headphones to avoid feedback!\n")
+    print("⚠️  Wear headphones to avoid feedback!\n")
 
     print("Input devices:")
     for dev in list_input_devices():
@@ -610,24 +659,18 @@ def main():
 
     input("\nPress Enter to start (5 second test)...")
 
-    mic = MicrophoneCapture()
-    speaker = SpeakerOutput()
+    with MicrophoneCapture() as mic, SpeakerOutput() as speaker:
+        print("Loopback active - speak into mic!")
 
-    mic.start()
-    speaker.start()
+        start_time = time.time()
+        while time.time() - start_time < 5:
+            chunk = mic.read_chunk()
+            # Note: Sample rate mismatch (16kHz -> 24kHz) will cause pitch shift
+            # This is just a test - real pipeline will handle conversion
+            speaker.play(chunk)
 
-    print("Loopback active - speak into mic!")
-
-    start_time = time.time()
-    while time.time() - start_time < 5:
-        chunk = mic.read_chunk()
-        # Note: Sample rate mismatch (16kHz -> 24kHz) will cause pitch shift
-        # This is just a test - real pipeline will handle conversion
-        speaker.play(chunk)
-
-    mic.stop()
-    speaker.stop()
     print("Test complete!")
+
 
 if __name__ == "__main__":
     main()
@@ -635,14 +678,137 @@ if __name__ == "__main__":
 
 **Test it:**
 ```bash
-cd python/src/audio
-python test_loopback.py
-# Use headphones! Should hear your voice
+cd python
+source venv/bin/activate
+python -m src.audio.test_loopback
+# Use headphones! Should hear your voice (pitch shifted)
 ```
 
 **Done when:**
 - [ ] Can hear your voice through speakers
 - [ ] No crashes or errors
+
+---
+
+### Task 2.4: Add System Audio Capture (Optional - for incoming Zoom audio)
+**What:** Create a class that captures system audio (for translating incoming Zoom audio)
+
+**File to create:** `python/src/audio/system_capture.py`
+
+> **Note:** This uses the same pattern as MicrophoneCapture but at 24kHz (SAMPLE_RATE_SYSTEM).
+> Requires BlackHole or similar virtual audio device to capture system audio.
+
+```python
+"""System audio capture module for capturing application audio."""
+from __future__ import annotations
+
+import pyaudio
+from collections.abc import Generator
+
+from . import SAMPLE_RATE_SYSTEM, CHANNELS, CHUNK_SIZE
+
+
+class SystemAudioCapture:
+    """Captures system audio (e.g., from Zoom) via virtual audio device."""
+
+    FORMAT = pyaudio.paInt16  # 16-bit PCM
+
+    def __init__(self, device_index: int | None = None) -> None:
+        """
+        Initialize system audio capture.
+
+        Args:
+            device_index: PyAudio device index for the virtual audio device
+                         (e.g., BlackHole). If None, uses default input.
+        """
+        self.device_index = device_index
+        self._audio: pyaudio.PyAudio | None = None
+        self._stream: pyaudio.Stream | None = None
+
+    def start(self) -> None:
+        """Start capturing system audio."""
+        self._audio = pyaudio.PyAudio()
+        self._stream = self._audio.open(
+            format=self.FORMAT,
+            channels=CHANNELS,
+            rate=SAMPLE_RATE_SYSTEM,
+            input=True,
+            input_device_index=self.device_index,
+            frames_per_buffer=CHUNK_SIZE,
+        )
+        print(f"System audio capture started (device: {self.device_index})")
+
+    def read_chunk(self) -> bytes:
+        """Read one chunk of audio data."""
+        if self._stream is None:
+            raise RuntimeError("Stream not started. Call start() first.")
+        return self._stream.read(CHUNK_SIZE, exception_on_overflow=False)
+
+    def stream_audio(self) -> Generator[bytes, None, None]:
+        """Generator that yields audio chunks continuously."""
+        while self._stream and self._stream.is_active():
+            yield self.read_chunk()
+
+    def stop(self) -> None:
+        """Stop capturing audio and release resources."""
+        if self._stream:
+            self._stream.stop_stream()
+            self._stream.close()
+            self._stream = None
+        if self._audio:
+            self._audio.terminate()
+            self._audio = None
+        print("System audio capture stopped")
+
+    def __enter__(self) -> SystemAudioCapture:
+        """Context manager entry."""
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Context manager exit."""
+        self.stop()
+
+
+def find_blackhole_device() -> int | None:
+    """Find the BlackHole virtual audio device index."""
+    audio = pyaudio.PyAudio()
+
+    for i in range(audio.get_device_count()):
+        info = audio.get_device_info_by_index(i)
+        if "blackhole" in info["name"].lower() and info["maxInputChannels"] > 0:
+            audio.terminate()
+            return i
+
+    audio.terminate()
+    return None
+
+
+# Test if run directly
+if __name__ == "__main__":
+    from .microphone import list_input_devices
+
+    print("Available input devices:")
+    for dev in list_input_devices():
+        print(f"  [{dev['index']}] {dev['name']}")
+
+    blackhole_idx = find_blackhole_device()
+    if blackhole_idx is not None:
+        print(f"\n✅ Found BlackHole at index {blackhole_idx}")
+    else:
+        print("\n⚠️  BlackHole not found. Install it with: brew install blackhole-2ch")
+```
+
+**Test it:**
+```bash
+cd python
+source venv/bin/activate
+python -m src.audio.system_capture
+```
+
+**Done when:**
+- [ ] Lists available devices
+- [ ] Finds BlackHole device (if installed)
 
 ---
 
@@ -910,16 +1076,25 @@ After completing Phases 1-3, you'll have:
 
 ### Run Commands
 ```bash
-# Start Python backend
+# Start both Electron + Python (recommended)
+./scripts/dev.sh
+
+# Start Python backend only
 cd python && source venv/bin/activate && python src/main.py
 
-# Start Electron
+# Start Electron only
 cd electron && npm run dev
 
-# Run audio test
-cd python && source venv/bin/activate && python src/audio/test_loopback.py
+# Run microphone test
+cd python && source venv/bin/activate && python -m src.audio.microphone
 
-# Run translation test
+# Run speaker test
+cd python && source venv/bin/activate && python -m src.audio.speaker
+
+# Run audio loopback test
+cd python && source venv/bin/activate && python -m src.audio.test_loopback
+
+# Run translation test (requires Gemini API credentials)
 cd python && source venv/bin/activate && python -m src.gemini.pipeline
 ```
 
