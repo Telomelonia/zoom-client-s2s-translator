@@ -86,7 +86,9 @@ All major decisions must be logged in PROJECT_STATUS.md with:
 - Alternatives considered
 
 ## Current Status
-**Phase:** Project Setup
+**Phase:** Audio Pipeline - Phase 2B (Playback)
+**Last Completed:** Phase 2A - Audio Capture (commit fd4334e)
+**Progress:** 35%
 **API Status:** Gemini S2ST available (Private Preview, FREE)
 **Blockers:** None
 
