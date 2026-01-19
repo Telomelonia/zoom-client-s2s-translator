@@ -1,5 +1,28 @@
 # CLAUDE.md - Project Intelligence
 
+## AGENT ROUTING - READ FIRST
+
+### Default Behavior
+When the user makes ANY request:
+1. **ALWAYS invoke @project-manager first**
+2. Project Manager coordinates with other agents as needed
+3. NEVER skip directly to senior-developer or junior-developer
+
+### User Bypass Commands (explicit only)
+- `/senior [request]` - Direct senior developer access
+- `/junior [request]` - Direct junior developer access
+
+### Orchestration Overview
+```
+User → Project Manager → Senior Developer → Junior Developer
+                ↑                                    │
+                └────────────────────────────────────┘
+```
+
+See `docs/ORCHESTRATION_PROTOCOL.md` for full details.
+
+---
+
 ## Project Overview
 **Name:** Zoom Real-Time Speech-to-Speech Translator
 **Goal:** Mac/Windows desktop app providing live bidirectional translation for Zoom calls using Google's Gemini Live API (S2ST)
