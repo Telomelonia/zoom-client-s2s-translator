@@ -15,7 +15,7 @@ BIT_DEPTH: Final[int] = 16  # bits
 CHANNELS: Final[int] = 1  # mono
 CHUNK_SIZE: Final[int] = 1024  # frames
 
-# Import main classes
+# Import capture classes
 from .capture import (
     MicrophoneCapture,
     SystemAudioCapture,
@@ -26,6 +26,17 @@ from .capture import (
     AudioStreamError,
 )
 
+# Import playback classes
+from .playback import (
+    SpeakerOutput,
+    VirtualMicOutput,
+    PlaybackState,
+    AudioPlaybackError,
+    PlaybackDeviceError,
+    PlaybackStreamError,
+)
+
+# Import device management
 from .devices import (
     AudioDevice,
     AudioDeviceManager,
@@ -33,6 +44,8 @@ from .devices import (
     list_audio_devices,
     find_microphone_device,
     find_loopback_device,
+    find_speaker_device,
+    find_virtual_mic_device,
 )
 
 __all__ = [
@@ -51,6 +64,13 @@ __all__ = [
     "AudioCaptureError",
     "AudioDeviceError",
     "AudioStreamError",
+    # Playback classes
+    "SpeakerOutput",
+    "VirtualMicOutput",
+    "PlaybackState",
+    "AudioPlaybackError",
+    "PlaybackDeviceError",
+    "PlaybackStreamError",
     # Device management
     "AudioDevice",
     "AudioDeviceManager",
@@ -58,4 +78,6 @@ __all__ = [
     "list_audio_devices",
     "find_microphone_device",
     "find_loopback_device",
+    "find_speaker_device",
+    "find_virtual_mic_device",
 ]

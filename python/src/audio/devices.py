@@ -504,6 +504,76 @@ def find_loopback_device() -> Optional[AudioDevice]:
         return None
 
 
+def find_speaker_device(name: Optional[str] = None) -> Optional[AudioDevice]:
+    """
+    Find a speaker (output) device.
+
+    Args:
+        name: Device name to search for (None = default output device)
+
+    Returns:
+        AudioDevice if found, None otherwise
+
+    Example:
+        ```python
+        speaker = find_speaker_device()
+        if speaker:
+            print(f"Default speaker: {speaker.name}")
+        ```
+    """
+    with AudioDeviceManager() as manager:
+        if name:
+            device = manager.get_device_by_name(name)
+            if device and device.is_output_device:
+                return device
+            return None
+        else:
+            return manager.get_default_output_device()
+
+
+def find_virtual_mic_device() -> Optional[AudioDevice]:
+    """
+    Find a virtual audio device suitable for routing audio to Zoom.
+
+    This looks for virtual output devices (BlackHole, VB-Audio, etc.)
+    that can be selected as an input device in Zoom.
+
+    Returns:
+        AudioDevice if found, None otherwise
+
+    Example:
+        ```python
+        virtual_mic = find_virtual_mic_device()
+        if virtual_mic:
+            print(f"Use device index {virtual_mic.index} for VirtualMicOutput")
+        ```
+    """
+    with AudioDeviceManager() as manager:
+        # Look for virtual devices that support output
+        # (output from our app = input for other apps like Zoom)
+
+        # Try BlackHole first (macOS)
+        device = manager.get_device_by_name("blackhole")
+        if device and device.is_output_device:
+            return device
+
+        # Try VB-Audio (Windows)
+        device = manager.get_device_by_name("cable input")
+        if device and device.is_output_device:
+            return device
+
+        device = manager.get_device_by_name("vb-audio")
+        if device and device.is_output_device:
+            return device
+
+        # Return first virtual output device found
+        for device in manager.get_output_devices():
+            if device.is_virtual_device:
+                return device
+
+        return None
+
+
 # CLI utility for testing
 if __name__ == "__main__":
     """Print all available audio devices when run as script."""

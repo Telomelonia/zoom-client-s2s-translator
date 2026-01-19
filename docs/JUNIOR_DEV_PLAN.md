@@ -8,11 +8,13 @@
 | Phase | Status | Tasks |
 |-------|--------|-------|
 | 1. Project Setup | ✅ Complete | 5/5 |
-| 2. Audio Capture | 🚀 In Progress | 0/4 |
+| 2A. Audio Capture | ✅ Complete | 4/4 |
+| 2B. Audio Playback | ✅ Complete (Submitted for Review) | 4/4 |
 | 3. Gemini Integration | Not Started | 0/2 |
 | 4. Full Integration | Not Started | 0/6 |
 
-**Next Task:** [Task 2.1: Implement Microphone Capture](#task-21-implement-microphone-capture--start-here)
+**Current Status:** Phase 2B submitted for review (REVIEW-2026-01-19-001)
+**Next Task:** Awaiting Senior Developer review and approval
 
 ---
 
@@ -347,11 +349,11 @@ npm run start
 
 ---
 
-## Phase 2: Audio Capture 🚀 IN PROGRESS
+## Phase 2A: Audio Capture ✅ COMPLETE
 
-> **Status:** Now active. Implement the audio capture modules.
+> **Status:** All tasks completed and committed. See commit fd4334e.
 
-### Task 2.1: Implement Microphone Capture ← START HERE
+### Task 2.1: Implement Microphone Capture ✅ COMPLETE
 **What:** Create a class that captures audio from the microphone
 
 **File to create:** `python/src/audio/microphone.py`
@@ -809,6 +811,882 @@ python -m src.audio.system_capture
 **Done when:**
 - [ ] Lists available devices
 - [ ] Finds BlackHole device (if installed)
+
+---
+
+## Phase 2B: Audio Playback ✅ COMPLETE (Submitted for Review)
+
+> **Status:** Implementation complete. Submitted as REVIEW-2026-01-19-001.
+> **CRITICAL CORRECTION APPLIED:** Used `queue.Queue` instead of `asyncio.Queue` for thread-safe PyAudio callbacks.
+> **Reference:** Implementation follows exact patterns from `python/src/audio/capture.py`.
+
+### Task 2B.1: Implement Speaker Output ← START HERE
+**What:** Create a class that plays translated audio through speakers
+
+**File to create:** `python/src/audio/playback.py`
+
+> **Important:** Follow the EXACT same patterns as `capture.py`:
+> - Use PlaybackState enum (matching CaptureState pattern)
+> - Use async queues for audio data
+> - Use PyAudio callback mode for low latency
+> - Include statistics tracking
+> - Support context managers
+
+```python
+"""
+Audio playback module.
+
+Provides classes for playing audio to speakers and virtual microphone devices.
+Uses PyAudio with async queues for non-blocking real-time streaming.
+"""
+
+import asyncio
+import logging
+from typing import Optional, Callable, Awaitable
+from dataclasses import dataclass
+from enum import Enum, auto
+
+import pyaudio
+import numpy as np
+
+from . import (
+    SAMPLE_RATE_OUTPUT,
+    CHANNELS,
+    CHUNK_SIZE,
+    BIT_DEPTH,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class PlaybackState(Enum):
+    """Audio playback state."""
+
+    STOPPED = auto()
+    STARTING = auto()
+    RUNNING = auto()
+    STOPPING = auto()
+    ERROR = auto()
+
+
+class AudioPlaybackError(Exception):
+    """Base exception for audio playback errors."""
+
+    pass
+
+
+class PlaybackDeviceError(AudioPlaybackError):
+    """Playback device not found or unavailable."""
+
+    pass
+
+
+class PlaybackStreamError(AudioPlaybackError):
+    """Error during audio playback streaming."""
+
+    pass
+
+
+class BasePlaybackDevice:
+    """
+    Base class for audio playback devices.
+
+    Provides common functionality for both speaker and virtual mic output.
+    Uses callback mode for minimal latency and async queues for integration.
+    """
+
+    def __init__(
+        self,
+        sample_rate: int,
+        chunk_size: int = CHUNK_SIZE,
+        channels: int = CHANNELS,
+        device_index: Optional[int] = None,
+    ):
+        """
+        Initialize audio playback device.
+
+        Args:
+            sample_rate: Audio sample rate in Hz
+            chunk_size: Number of frames per buffer
+            channels: Number of audio channels (1=mono, 2=stereo)
+            device_index: PyAudio device index (None = default device)
+        """
+        self._sample_rate = sample_rate
+        self._chunk_size = chunk_size
+        self._channels = channels
+        self._device_index = device_index
+
+        self._pyaudio: Optional[pyaudio.PyAudio] = None
+        self._stream: Optional[pyaudio.Stream] = None
+        self._state = PlaybackState.STOPPED
+
+        # Async queue for audio data to play
+        self._queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=100)
+
+        # Event loop reference for callback thread
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+        # Statistics
+        self._chunks_played = 0
+        self._bytes_played = 0
+        self._underruns = 0
+
+        # Silence buffer for underruns
+        self._silence = bytes(chunk_size * channels * (BIT_DEPTH // 8))
+
+    @property
+    def state(self) -> PlaybackState:
+        """Current playback state."""
+        return self._state
+
+    @property
+    def sample_rate(self) -> int:
+        """Audio sample rate in Hz."""
+        return self._sample_rate
+
+    @property
+    def is_running(self) -> bool:
+        """Check if playback is currently running."""
+        return self._state == PlaybackState.RUNNING
+
+    @property
+    def stats(self) -> dict:
+        """Get playback statistics."""
+        return {
+            "chunks_played": self._chunks_played,
+            "bytes_played": self._bytes_played,
+            "underruns": self._underruns,
+            "queue_size": self._queue.qsize(),
+        }
+
+    def _audio_callback(
+        self,
+        in_data: bytes,
+        frame_count: int,
+        time_info: dict,
+        status_flags: int,
+    ) -> tuple[bytes, int]:
+        """
+        PyAudio callback executed in separate thread.
+
+        This is called by PyAudio when it needs more audio data to play.
+        We need to return data quickly to avoid audio glitches.
+
+        Args:
+            in_data: Not used for output streams
+            frame_count: Number of frames requested
+            time_info: Timing information from PortAudio
+            status_flags: Stream status flags
+
+        Returns:
+            Tuple of (audio_data, continue_flag)
+        """
+        # Check for output underflow (buffer underrun)
+        if status_flags & pyaudio.paOutputUnderflow:
+            self._underruns += 1
+            logger.warning("Audio output underflow detected (buffer underrun)")
+
+        try:
+            # Try to get audio from queue without blocking
+            try:
+                audio_data = self._queue.get_nowait()
+                self._chunks_played += 1
+                self._bytes_played += len(audio_data)
+            except asyncio.QueueEmpty:
+                # No data available, play silence
+                audio_data = self._silence
+                self._underruns += 1
+
+        except Exception as e:
+            logger.error(f"Error in playback callback: {e}")
+            audio_data = self._silence
+
+        return (audio_data, pyaudio.paContinue)
+
+    async def start(self) -> None:
+        """
+        Start audio playback.
+
+        Raises:
+            PlaybackDeviceError: If device is not available
+            PlaybackStreamError: If stream cannot be started
+        """
+        if self._state != PlaybackState.STOPPED:
+            raise PlaybackStreamError(f"Cannot start: already in {self._state} state")
+
+        self._state = PlaybackState.STARTING
+        self._loop = asyncio.get_running_loop()
+
+        try:
+            # Initialize PyAudio
+            self._pyaudio = pyaudio.PyAudio()
+
+            # Validate device
+            if self._device_index is not None:
+                try:
+                    device_info = self._pyaudio.get_device_info_by_index(
+                        self._device_index
+                    )
+                    logger.info(f"Using audio device: {device_info['name']}")
+                except Exception as e:
+                    raise PlaybackDeviceError(f"Invalid device index: {e}")
+
+            # Open audio stream in callback mode
+            self._stream = self._pyaudio.open(
+                format=pyaudio.paInt16,  # 16-bit PCM
+                channels=self._channels,
+                rate=self._sample_rate,
+                output=True,
+                output_device_index=self._device_index,
+                frames_per_buffer=self._chunk_size,
+                stream_callback=self._audio_callback,
+                start=False,  # We'll start manually
+            )
+
+            # Start the stream
+            self._stream.start_stream()
+            self._state = PlaybackState.RUNNING
+
+            logger.info(
+                f"Audio playback started: {self._sample_rate}Hz, "
+                f"{self._channels}ch, {self._chunk_size} frames"
+            )
+
+        except Exception as e:
+            self._state = PlaybackState.ERROR
+            await self._cleanup()
+            raise PlaybackStreamError(f"Failed to start audio stream: {e}")
+
+    async def stop(self) -> None:
+        """
+        Stop audio playback gracefully.
+
+        This is idempotent - calling multiple times is safe.
+        """
+        if self._state == PlaybackState.STOPPED:
+            return
+
+        self._state = PlaybackState.STOPPING
+        logger.info("Stopping audio playback...")
+
+        await self._cleanup()
+
+        self._state = PlaybackState.STOPPED
+        logger.info(f"Audio playback stopped. Stats: {self.stats}")
+
+    async def _cleanup(self) -> None:
+        """Clean up PyAudio resources."""
+        try:
+            if self._stream:
+                if self._stream.is_active():
+                    self._stream.stop_stream()
+                self._stream.close()
+                self._stream = None
+
+            if self._pyaudio:
+                self._pyaudio.terminate()
+                self._pyaudio = None
+
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+
+    async def write_chunk(self, audio_data: bytes, timeout: Optional[float] = None) -> None:
+        """
+        Write audio data to playback queue.
+
+        Args:
+            audio_data: Raw PCM audio bytes to play
+            timeout: Maximum time to wait if queue is full (None = wait forever)
+
+        Raises:
+            asyncio.TimeoutError: If timeout expires
+            PlaybackStreamError: If playback is not running
+        """
+        if self._state != PlaybackState.RUNNING:
+            raise PlaybackStreamError("Cannot write: playback is not running")
+
+        if timeout:
+            await asyncio.wait_for(self._queue.put(audio_data), timeout=timeout)
+        else:
+            await self._queue.put(audio_data)
+
+    def write_chunk_nowait(self, audio_data: bytes) -> bool:
+        """
+        Write audio data to playback queue without blocking.
+
+        Args:
+            audio_data: Raw PCM audio bytes to play
+
+        Returns:
+            True if data was queued, False if queue was full
+        """
+        if self._state != PlaybackState.RUNNING:
+            return False
+
+        try:
+            self._queue.put_nowait(audio_data)
+            return True
+        except asyncio.QueueFull:
+            logger.warning("Playback queue full, dropping chunk")
+            return False
+
+    async def __aenter__(self):
+        """Async context manager entry."""
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        await self.stop()
+
+
+class SpeakerOutput(BasePlaybackDevice):
+    """
+    Plays audio through physical speakers.
+
+    Optimized for playing translated speech from Gemini S2ST API:
+    - 24kHz sample rate (Gemini API output format)
+    - 16-bit PCM format
+    - Mono channel
+    - 1024 frame chunks for low latency
+
+    Example:
+        ```python
+        async with SpeakerOutput() as speaker:
+            while True:
+                translated_audio = await get_from_gemini()
+                await speaker.write_chunk(translated_audio)
+        ```
+    """
+
+    def __init__(
+        self,
+        device_index: Optional[int] = None,
+        sample_rate: int = SAMPLE_RATE_OUTPUT,
+        chunk_size: int = CHUNK_SIZE,
+    ):
+        """
+        Initialize speaker output.
+
+        Args:
+            device_index: PyAudio device index (None = default speakers)
+            sample_rate: Sample rate in Hz (default: 24kHz for Gemini output)
+            chunk_size: Buffer size in frames (default: 1024)
+        """
+        super().__init__(
+            sample_rate=sample_rate,
+            chunk_size=chunk_size,
+            channels=CHANNELS,
+            device_index=device_index,
+        )
+        logger.info("SpeakerOutput initialized")
+
+
+class VirtualMicOutput(BasePlaybackDevice):
+    """
+    Routes audio to a virtual microphone device.
+
+    Used to send translated audio INTO Zoom calls via a virtual audio device
+    (BlackHole on macOS, VB-Audio Cable on Windows).
+
+    The virtual mic device must be:
+    1. Installed on the system (BlackHole, VB-Audio, etc.)
+    2. Selected as the input device in Zoom
+
+    Example:
+        ```python
+        # Find BlackHole device index first
+        device_idx = find_virtual_mic_device()
+
+        async with VirtualMicOutput(device_index=device_idx) as virtual_mic:
+            while True:
+                translated_audio = await get_from_gemini()
+                await virtual_mic.write_chunk(translated_audio)
+        ```
+    """
+
+    def __init__(
+        self,
+        device_index: int,
+        sample_rate: int = SAMPLE_RATE_OUTPUT,
+        chunk_size: int = CHUNK_SIZE,
+    ):
+        """
+        Initialize virtual microphone output.
+
+        Args:
+            device_index: PyAudio device index for virtual audio device (required)
+            sample_rate: Sample rate in Hz (default: 24kHz)
+            chunk_size: Buffer size in frames (default: 1024)
+        """
+        super().__init__(
+            sample_rate=sample_rate,
+            chunk_size=chunk_size,
+            channels=CHANNELS,
+            device_index=device_index,
+        )
+        logger.info("VirtualMicOutput initialized")
+```
+
+**Done when:**
+- [ ] File created at `python/src/audio/playback.py`
+- [ ] SpeakerOutput class implemented
+- [ ] VirtualMicOutput class implemented
+- [ ] All code has type hints and docstrings
+
+---
+
+### Task 2B.2: Add Output Device Convenience Functions
+**What:** Add helper functions to find speaker and virtual mic devices
+
+**File to update:** `python/src/audio/devices.py`
+
+Add these functions after the existing `find_loopback_device()` function:
+
+```python
+def find_speaker_device(name: Optional[str] = None) -> Optional[AudioDevice]:
+    """
+    Find a speaker (output) device.
+
+    Args:
+        name: Device name to search for (None = default output device)
+
+    Returns:
+        AudioDevice if found, None otherwise
+
+    Example:
+        ```python
+        speaker = find_speaker_device()
+        if speaker:
+            print(f"Default speaker: {speaker.name}")
+        ```
+    """
+    with AudioDeviceManager() as manager:
+        if name:
+            device = manager.get_device_by_name(name)
+            if device and device.is_output_device:
+                return device
+            return None
+        else:
+            return manager.get_default_output_device()
+
+
+def find_virtual_mic_device() -> Optional[AudioDevice]:
+    """
+    Find a virtual audio device suitable for routing audio to Zoom.
+
+    This looks for virtual output devices (BlackHole, VB-Audio, etc.)
+    that can be selected as an input device in Zoom.
+
+    Returns:
+        AudioDevice if found, None otherwise
+
+    Example:
+        ```python
+        virtual_mic = find_virtual_mic_device()
+        if virtual_mic:
+            print(f"Use device index {virtual_mic.index} for VirtualMicOutput")
+        ```
+    """
+    with AudioDeviceManager() as manager:
+        # Look for virtual devices that support output
+        # (output from our app = input for other apps like Zoom)
+
+        # Try BlackHole first (macOS)
+        device = manager.get_device_by_name("blackhole")
+        if device and device.is_output_device:
+            return device
+
+        # Try VB-Audio (Windows)
+        device = manager.get_device_by_name("cable input")
+        if device and device.is_output_device:
+            return device
+
+        device = manager.get_device_by_name("vb-audio")
+        if device and device.is_output_device:
+            return device
+
+        # Return first virtual output device found
+        for device in manager.get_output_devices():
+            if device.is_virtual_device:
+                return device
+
+        return None
+```
+
+**Done when:**
+- [ ] `find_speaker_device()` function added
+- [ ] `find_virtual_mic_device()` function added
+- [ ] Functions properly detect BlackHole and VB-Audio devices
+
+---
+
+### Task 2B.3: Update Audio Module Exports
+**What:** Add new classes to the audio module's public API
+
+**File to update:** `python/src/audio/__init__.py`
+
+Replace the entire file with:
+
+```python
+"""
+Audio processing module.
+
+Handles audio capture from microphone and system audio,
+as well as audio output to speakers and virtual microphone.
+"""
+
+from typing import Final
+
+# Audio configuration constants
+SAMPLE_RATE_MIC: Final[int] = 16000  # Hz
+SAMPLE_RATE_SYSTEM: Final[int] = 24000  # Hz
+SAMPLE_RATE_OUTPUT: Final[int] = 24000  # Hz
+BIT_DEPTH: Final[int] = 16  # bits
+CHANNELS: Final[int] = 1  # mono
+CHUNK_SIZE: Final[int] = 1024  # frames
+
+# Import capture classes
+from .capture import (
+    MicrophoneCapture,
+    SystemAudioCapture,
+    AudioChunk,
+    CaptureState,
+    AudioCaptureError,
+    AudioDeviceError,
+    AudioStreamError,
+)
+
+# Import playback classes
+from .playback import (
+    SpeakerOutput,
+    VirtualMicOutput,
+    PlaybackState,
+    AudioPlaybackError,
+    PlaybackDeviceError,
+    PlaybackStreamError,
+)
+
+# Import device management
+from .devices import (
+    AudioDevice,
+    AudioDeviceManager,
+    DeviceType,
+    list_audio_devices,
+    find_microphone_device,
+    find_loopback_device,
+    find_speaker_device,
+    find_virtual_mic_device,
+)
+
+__all__ = [
+    # Constants
+    "SAMPLE_RATE_MIC",
+    "SAMPLE_RATE_SYSTEM",
+    "SAMPLE_RATE_OUTPUT",
+    "BIT_DEPTH",
+    "CHANNELS",
+    "CHUNK_SIZE",
+    # Capture classes
+    "MicrophoneCapture",
+    "SystemAudioCapture",
+    "AudioChunk",
+    "CaptureState",
+    "AudioCaptureError",
+    "AudioDeviceError",
+    "AudioStreamError",
+    # Playback classes
+    "SpeakerOutput",
+    "VirtualMicOutput",
+    "PlaybackState",
+    "AudioPlaybackError",
+    "PlaybackDeviceError",
+    "PlaybackStreamError",
+    # Device management
+    "AudioDevice",
+    "AudioDeviceManager",
+    "DeviceType",
+    "list_audio_devices",
+    "find_microphone_device",
+    "find_loopback_device",
+    "find_speaker_device",
+    "find_virtual_mic_device",
+]
+```
+
+**Done when:**
+- [ ] All new classes exported
+- [ ] All new functions exported
+- [ ] No import errors
+
+---
+
+### Task 2B.4: Create Playback Test Script
+**What:** Create a test script demonstrating audio playback usage
+
+**File to create:** `python/examples/test_audio_playback.py`
+
+```python
+"""
+Example script demonstrating audio playback usage.
+
+This script shows how to use SpeakerOutput and VirtualMicOutput
+to play audio in real-time.
+
+Usage:
+    python examples/test_audio_playback.py
+"""
+
+import asyncio
+import logging
+import math
+import struct
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from audio import (
+    SpeakerOutput,
+    VirtualMicOutput,
+    AudioDeviceManager,
+    find_speaker_device,
+    find_virtual_mic_device,
+    SAMPLE_RATE_OUTPUT,
+    CHUNK_SIZE,
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+
+logger = logging.getLogger(__name__)
+
+
+def generate_sine_wave(
+    frequency: float,
+    duration_seconds: float,
+    sample_rate: int = SAMPLE_RATE_OUTPUT,
+    amplitude: float = 0.5,
+) -> bytes:
+    """
+    Generate a sine wave tone as PCM audio data.
+
+    Args:
+        frequency: Tone frequency in Hz
+        duration_seconds: Duration of the tone
+        sample_rate: Audio sample rate
+        amplitude: Volume (0.0 to 1.0)
+
+    Returns:
+        Raw PCM audio bytes (16-bit signed, mono)
+    """
+    num_samples = int(sample_rate * duration_seconds)
+    max_amplitude = int(32767 * amplitude)
+
+    audio_data = b""
+    for i in range(num_samples):
+        t = i / sample_rate
+        value = int(max_amplitude * math.sin(2 * math.pi * frequency * t))
+        audio_data += struct.pack("<h", value)
+
+    return audio_data
+
+
+async def test_speaker_output(duration_seconds: float = 3.0):
+    """
+    Test speaker output by playing a test tone.
+
+    Args:
+        duration_seconds: How long to play the tone
+    """
+    logger.info("=== Testing Speaker Output ===")
+
+    # Show available output devices
+    with AudioDeviceManager() as manager:
+        output_devices = manager.get_output_devices()
+        logger.info(f"Found {len(output_devices)} output devices:")
+        for device in output_devices:
+            logger.info(f"  {device}")
+
+        default_output = manager.get_default_output_device()
+        if default_output:
+            logger.info(f"\nDefault output: {default_output.name}")
+
+    # Generate test tones
+    logger.info("\nGenerating test tones...")
+    tone_440hz = generate_sine_wave(440, 1.0)  # A4 note
+    tone_880hz = generate_sine_wave(880, 1.0)  # A5 note
+    tone_523hz = generate_sine_wave(523.25, 1.0)  # C5 note
+
+    # Play through speakers
+    logger.info("Playing test tones through speakers...")
+    logger.info("You should hear: A4 (440Hz) -> C5 (523Hz) -> A5 (880Hz)")
+
+    async with SpeakerOutput() as speaker:
+        # Play tones by writing chunks
+        chunk_bytes = CHUNK_SIZE * 2  # 16-bit = 2 bytes per sample
+
+        # Play 440Hz
+        logger.info("Playing 440Hz (A4)...")
+        for i in range(0, len(tone_440hz), chunk_bytes):
+            chunk = tone_440hz[i:i + chunk_bytes]
+            if len(chunk) == chunk_bytes:
+                await speaker.write_chunk(chunk)
+
+        # Small pause
+        await asyncio.sleep(0.2)
+
+        # Play 523Hz
+        logger.info("Playing 523Hz (C5)...")
+        for i in range(0, len(tone_523hz), chunk_bytes):
+            chunk = tone_523hz[i:i + chunk_bytes]
+            if len(chunk) == chunk_bytes:
+                await speaker.write_chunk(chunk)
+
+        # Small pause
+        await asyncio.sleep(0.2)
+
+        # Play 880Hz
+        logger.info("Playing 880Hz (A5)...")
+        for i in range(0, len(tone_880hz), chunk_bytes):
+            chunk = tone_880hz[i:i + chunk_bytes]
+            if len(chunk) == chunk_bytes:
+                await speaker.write_chunk(chunk)
+
+        # Wait for playback to finish
+        await asyncio.sleep(0.5)
+
+        logger.info(f"\nPlayback stats: {speaker.stats}")
+
+
+async def test_virtual_mic_output():
+    """
+    Test virtual microphone output (if available).
+    """
+    logger.info("\n=== Testing Virtual Mic Output ===")
+
+    virtual_mic = find_virtual_mic_device()
+    if not virtual_mic:
+        logger.warning(
+            "No virtual audio device found!\n"
+            "Install BlackHole (macOS): brew install blackhole-2ch\n"
+            "Or VB-Audio Cable (Windows): https://vb-audio.com/Cable/"
+        )
+        return
+
+    logger.info(f"Found virtual mic device: {virtual_mic}")
+    logger.info("Sending test tone to virtual microphone...")
+    logger.info("(You can monitor this in another app that uses the virtual mic as input)")
+
+    # Generate test tone
+    tone = generate_sine_wave(660, 2.0)  # E5 note for 2 seconds
+    chunk_bytes = CHUNK_SIZE * 2
+
+    async with VirtualMicOutput(device_index=virtual_mic.index) as output:
+        for i in range(0, len(tone), chunk_bytes):
+            chunk = tone[i:i + chunk_bytes]
+            if len(chunk) == chunk_bytes:
+                await output.write_chunk(chunk)
+
+        await asyncio.sleep(0.5)
+        logger.info(f"Virtual mic stats: {output.stats}")
+
+
+async def test_loopback():
+    """
+    Test microphone to speaker loopback (if capture module available).
+    """
+    logger.info("\n=== Testing Audio Loopback ===")
+
+    try:
+        from audio import MicrophoneCapture
+
+        logger.info("Recording from microphone and playing through speakers...")
+        logger.info("Speak into your microphone! (5 second test)")
+        logger.info("WARNING: Use headphones to avoid feedback!")
+
+        async with MicrophoneCapture() as mic, SpeakerOutput() as speaker:
+            loop = asyncio.get_running_loop()
+            start_time = loop.time()
+
+            while (loop.time() - start_time) < 5:
+                try:
+                    chunk = await mic.read_chunk(timeout=0.1)
+                    # Note: Sample rate mismatch (16kHz -> 24kHz) will cause pitch shift
+                    # This is expected - the real Gemini pipeline outputs 24kHz
+                    speaker.write_chunk_nowait(chunk.data)
+                except asyncio.TimeoutError:
+                    pass
+
+        logger.info("Loopback test complete!")
+
+    except ImportError:
+        logger.warning("MicrophoneCapture not available, skipping loopback test")
+
+
+async def test_device_enumeration():
+    """Test output device enumeration."""
+    logger.info("\n=== Testing Output Device Enumeration ===")
+
+    speaker = find_speaker_device()
+    if speaker:
+        logger.info(f"Default speaker: {speaker}")
+    else:
+        logger.warning("No default speaker found")
+
+    virtual_mic = find_virtual_mic_device()
+    if virtual_mic:
+        logger.info(f"Virtual mic device: {virtual_mic}")
+    else:
+        logger.info("No virtual mic device found (install BlackHole or VB-Audio)")
+
+
+async def main():
+    """Run all audio playback tests."""
+    logger.info("Starting audio playback tests\n")
+
+    try:
+        # Test device enumeration
+        await test_device_enumeration()
+
+        # Test speaker output
+        await test_speaker_output()
+
+        # Test virtual mic (if available)
+        await test_virtual_mic_output()
+
+        # Uncomment to test loopback (use headphones!)
+        # await test_loopback()
+
+        logger.info("\n=== All tests complete ===")
+
+    except KeyboardInterrupt:
+        logger.info("\nTests interrupted by user")
+    except Exception as e:
+        logger.exception(f"Error during tests: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**Test it:**
+```bash
+cd python
+source venv/bin/activate
+python examples/test_audio_playback.py
+```
+
+**Done when:**
+- [ ] Script runs without errors
+- [ ] Test tones play through speakers
+- [ ] Device enumeration works
+- [ ] Stats are displayed correctly
 
 ---
 
