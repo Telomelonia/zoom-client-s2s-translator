@@ -8,6 +8,7 @@
 .worktrees/
 .security-key
 logs/security/
+creds.json
 
 # Environment variables
 .env

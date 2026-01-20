@@ -151,7 +151,7 @@ class GeminiConfig:
     """
 
     target_language: SupportedLanguage
-    model: str = "gemini-2.5-flash-s2st-11-2025-exp"  # Vertex AI S2ST model (free preview)
+    model: str = "gemini-2.5-flash-s2st-exp-11-2025"  # Vertex AI S2ST model (private experimental)
     enable_transcription: bool = False
     enable_affective_dialog: bool = True
     voice_name: Optional[str] = None

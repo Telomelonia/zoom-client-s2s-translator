@@ -139,7 +139,8 @@ class GeminiS2STClient:
 
         # Client and session
         self._client: Optional[genai.Client] = None
-        self._session: Optional[genai.live.Session] = None
+        self._session_context = None  # Async context manager
+        self._session = None  # Session from context
         self._state = ConnectionState.DISCONNECTED
 
         # Reconnection and timeout handling
@@ -269,10 +270,11 @@ class GeminiS2STClient:
             # Create live config
             live_config = self._create_live_config()
 
-            # Connect to Live API
-            self._session = await self._client.aio.live.connect(
+            # Connect to Live API (returns async context manager)
+            self._session_context = self._client.aio.live.connect(
                 model=self._config.model, config=live_config
             )
+            self._session = await self._session_context.__aenter__()
 
             # Mark connection as established
             self._state = ConnectionState.CONNECTED
@@ -313,12 +315,13 @@ class GeminiS2STClient:
             except asyncio.CancelledError:
                 pass
 
-        # Close session
-        if self._session:
+        # Close session context
+        if self._session_context:
             try:
-                await self._session.close()
+                await self._session_context.__aexit__(None, None, None)
             except Exception as e:
-                logger.warning(f"Error closing session: {e}")
+                logger.warning(f"Error closing session context: {e}")
+            self._session_context = None
             self._session = None
 
         # Reset state

@@ -11,7 +11,7 @@ from typing import Optional
 from enum import Enum, auto
 from dataclasses import dataclass
 
-from ..audio import (
+from audio import (
     MicrophoneCapture,
     SystemAudioCapture,
     SpeakerOutput,
@@ -25,7 +25,7 @@ from ..audio import (
     BIT_DEPTH,
     CHANNELS,
 )
-from ..gemini import (
+from gemini import (
     GeminiS2STClient,
     GeminiConfig,
     SupportedLanguage,
