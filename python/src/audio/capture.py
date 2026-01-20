@@ -7,7 +7,7 @@ Uses PyAudio with async queues for non-blocking real-time streaming.
 
 import asyncio
 import logging
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable, Awaitable, AsyncGenerator
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -312,6 +312,32 @@ class BaseCaptureDevice:
             return await asyncio.wait_for(self._queue.get(), timeout=timeout)
         else:
             return await self._queue.get()
+
+    async def stream(self) -> AsyncGenerator[AudioChunk, None]:
+        """
+        Async generator that yields audio chunks continuously.
+
+        Yields:
+            AudioChunk: Audio data chunks while capture is running
+
+        Example:
+            ```python
+            async with MicrophoneCapture() as mic:
+                async for chunk in mic.stream():
+                    print(f"Received {len(chunk.data)} bytes")
+            ```
+        """
+        while self.is_running:
+            try:
+                chunk = await self.read_chunk(timeout=1.0)
+                if chunk:
+                    yield chunk
+            except asyncio.TimeoutError:
+                # Timeout is expected, just check if we're still running
+                continue
+            except AudioStreamError:
+                # Stream stopped
+                break
 
     async def __aenter__(self):
         """Async context manager entry."""

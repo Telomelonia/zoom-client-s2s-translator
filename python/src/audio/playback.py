@@ -328,7 +328,7 @@ class BasePlaybackDevice:
         if self._state != PlaybackState.RUNNING:
             raise PlaybackStreamError("Cannot write: playback is not running")
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         # Wrap blocking queue.put() in executor
         def blocking_put():

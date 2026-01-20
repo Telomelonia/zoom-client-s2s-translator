@@ -48,6 +48,13 @@ from .devices import (
     find_virtual_mic_device,
 )
 
+# Import utility functions
+from .utils import (
+    resample_audio,
+    convert_to_mono,
+    calculate_audio_duration,
+)
+
 __all__ = [
     # Constants
     "SAMPLE_RATE_MIC",
@@ -80,4 +87,8 @@ __all__ = [
     "find_loopback_device",
     "find_speaker_device",
     "find_virtual_mic_device",
+    # Utility functions
+    "resample_audio",
+    "convert_to_mono",
+    "calculate_audio_duration",
 ]

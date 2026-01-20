@@ -1,9 +1,22 @@
 """
 Audio routing module.
 
-Handles routing of audio between different sources and destinations:
-- Microphone -> Gemini -> Virtual Mic
-- System Audio -> Gemini -> Speakers
+Handles bidirectional translation pipeline orchestration between
+audio devices and Gemini Live API.
 """
 
-__all__: list[str] = []
+from .pipeline import (
+    TranslationPipeline,
+    PipelineMode,
+    PipelineState,
+    PipelineStats,
+    TranslationPipelineError,
+)
+
+__all__ = [
+    "TranslationPipeline",
+    "PipelineMode",
+    "PipelineState",
+    "PipelineStats",
+    "TranslationPipelineError",
+]

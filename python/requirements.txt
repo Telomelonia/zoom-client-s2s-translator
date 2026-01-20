@@ -1,11 +1,13 @@
-# Core Dependencies
-google-cloud-aiplatform>=1.38.0
-google-generativeai>=0.8.0
+# Core Dependencies - Vertex AI Gemini S2ST
+# Note: google-genai is the unified SDK that supports both Vertex AI and Google AI Studio
+# Using vertexai=True mode for free S2ST preview access
+google-genai>=1.0.0
 
 # Audio Processing
 pyaudio>=0.2.14
 sounddevice>=0.4.6
 numpy>=1.26.0
+scipy>=1.11.0
 
 # Async and WebSocket
 websockets>=12.0
