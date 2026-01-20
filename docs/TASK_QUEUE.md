@@ -11,11 +11,11 @@
 
 ## Active Tasks
 
-### TASK-2026-01-19-001: Implement Phase 2B - Audio Playback Pipeline
+### TASK-2026-01-19-002: Implement Phase 3 - Gemini Integration
 
 | Field | Value |
 |-------|-------|
-| **ID** | TASK-2026-01-19-001 |
+| **ID** | TASK-2026-01-19-002 |
 | **Status** | pending_senior_review |
 | **Created** | 2026-01-19 |
 | **Created By** | @project-manager |
@@ -23,51 +23,98 @@
 | **Priority** | High |
 
 **Description:**
-Implement the audio playback pipeline (Phase 2B) to complement the audio capture pipeline (Phase 2A). This includes:
-1. SpeakerOutput class - plays translated audio to physical speakers
-2. VirtualMicOutput class - routes audio to virtual microphone for Zoom input
-3. Output device enumeration functions
-4. Test examples demonstrating usage
+Implement the Gemini Live API integration (Phase 3) to connect the audio capture/playback pipeline to Google's S2ST translation service. This includes:
+1. GeminiS2STClient - WebSocket client for Gemini Live API
+2. GeminiConfig - Configuration and language support
+3. TranslationPipeline - Orchestrates audio devices and Gemini API
+4. Error handling with reconnection logic
+5. Test script demonstrating usage
 
-The implementation must follow the exact same patterns as Phase 2A (async/await, PyAudio callbacks, type hints, immutable dataclasses, enum-based state management).
+The implementation enables real-time speech-to-speech translation for Zoom calls.
+
+**Architecture:**
+```
+OUTGOING: Mic (16kHz) -> GeminiS2STClient -> Virtual Mic (24kHz) -> Zoom
+INCOMING: Zoom -> System Audio (24kHz) -> GeminiS2STClient -> Speakers (24kHz)
+```
 
 **Acceptance Criteria:**
-- [ ] SpeakerOutput class implemented with async queue-based playback
-- [ ] VirtualMicOutput class implemented for BlackHole/VB-Audio routing
-- [ ] find_speaker_device() convenience function added
-- [ ] find_virtual_mic_device() convenience function added
-- [ ] test_audio_playback.py example script created
-- [ ] All code has full type hints and docstrings
-- [ ] Context manager support (__aenter__, __aexit__)
-- [ ] Statistics tracking (chunks played, bytes played, underruns)
-- [ ] Audio module __init__.py updated with new exports
+- [ ] GeminiS2STClient connects to Gemini Live API successfully
+- [ ] Audio streaming works with `send_realtime_input()` method
+- [ ] Audio receiving works with async generator pattern
+- [ ] SupportedLanguage enum with 10+ languages (ja-JP, es-ES, fr-FR, etc.)
+- [ ] GeminiConfig immutable dataclass for configuration
+- [ ] TranslationPipeline supports outgoing, incoming, and bidirectional modes
+- [ ] Auto-detection of virtual audio devices (BlackHole/VB-Audio)
+- [ ] Custom exception hierarchy (GeminiError, GeminiConnectionError, etc.)
+- [ ] ReconnectionHandler with exponential backoff
+- [ ] Connection state tracking and statistics
+- [ ] Context manager support for all classes
+- [ ] Full type hints and docstrings
+- [ ] Test script with CLI for language selection
+- [ ] Module exports updated in __init__.py files
 
 **Context/Background:**
-- Phase 2A completed with MicrophoneCapture and SystemAudioCapture (commit fd4334e)
-- Playback classes should mirror the capture class patterns for consistency
-- Output format: 24kHz PCM, 16-bit, mono (matches Gemini API output)
-- Virtual mic is used to send translated audio INTO Zoom calls
+- Phase 2A (Audio Capture) and Phase 2B (Audio Playback) are complete
+- Audio formats match Gemini requirements: 16kHz input, 24kHz output
+- Model: `gemini-2.5-flash-native-audio-preview-12-2025`
+- SDK: `google-genai` Python package with `client.aio.live.connect()`
+- WebSocket-based real-time streaming
+- Session limit: 10 minutes (need reconnection handling)
 
-**Files Likely Affected:**
-- `python/src/audio/playback.py` (NEW)
-- `python/src/audio/devices.py` (UPDATE - add convenience functions)
-- `python/src/audio/__init__.py` (UPDATE - add exports)
-- `python/examples/test_audio_playback.py` (NEW)
+**Files to Create:**
+- `python/src/gemini/client.py` - GeminiS2STClient class
+- `python/src/gemini/config.py` - GeminiConfig, SupportedLanguage
+- `python/src/gemini/errors.py` - Custom exceptions, ReconnectionHandler
+- `python/src/routing/pipeline.py` - TranslationPipeline class
+- `python/examples/test_gemini_translation.py` - Test script
+
+**Files to Update:**
+- `python/src/gemini/__init__.py` - Add new exports
+- `python/src/routing/__init__.py` - Add new exports
+- `python/requirements.txt` - Ensure `google-genai` is included
 
 ---
 
 **Senior Developer Notes:**
-Implementation plan created in JUNIOR_DEV_PLAN.md. Follow the established patterns from capture.py exactly.
+Full implementation plan available in `docs/PHASE_3_GEMINI_INTEGRATION.md`.
+Detailed task breakdown in `docs/JUNIOR_DEV_PLAN.md` - Phase 3 section (Tasks 3.1-3.6).
 
 **Implementation Plan Link:**
-See `docs/JUNIOR_DEV_PLAN.md` - Phase 2B section
+- `docs/PHASE_3_GEMINI_INTEGRATION.md` - Comprehensive plan with research findings
+- `docs/JUNIOR_DEV_PLAN.md` - Task-by-task implementation guide
 
 **Completion Notes:**
 _To be filled when task is completed_
 
 | Commit Hash | Files Changed | Completed Date |
 |-------------|---------------|----------------|
-| | | |
+
+---
+
+## Completed Tasks Archive
+
+### TASK-2026-01-19-001: Implement Phase 2B - Audio Playback Pipeline
+
+| Field | Value |
+|-------|-------|
+| **ID** | TASK-2026-01-19-001 |
+| **Status** | closed |
+| **Created** | 2026-01-19 |
+| **Completed** | 2026-01-19 |
+| **Priority** | High |
+
+**Description:**
+Implemented audio playback pipeline with SpeakerOutput and VirtualMicOutput classes.
+
+**Completion Notes:**
+- All acceptance criteria met
+- Bug fix applied: `asyncio.get_event_loop()` replaced with `asyncio.get_running_loop()`
+- Code review passed by Senior Developer
+
+| Commit Hash | Files Changed | Completed Date |
+|-------------|---------------|----------------|
+| ee72496 | 4 | 2026-01-19 |
 
 ## Task Status Legend
 

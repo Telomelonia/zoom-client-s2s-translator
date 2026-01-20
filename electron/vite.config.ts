@@ -52,8 +52,10 @@ export default defineConfig({
       '@shared': resolve(__dirname, 'src/shared'),
     },
   },
+  root: resolve(__dirname, 'src/renderer'),
   build: {
-    outDir: 'dist/renderer',
+    outDir: resolve(__dirname, 'dist/renderer'),
+    emptyOutDir: true,
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'src/renderer/index.html'),

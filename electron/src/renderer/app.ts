@@ -20,7 +20,7 @@ const elements = {
   targetLang: document.getElementById('targetLang') as HTMLSelectElement,
   micDevice: document.getElementById('micDevice') as HTMLSelectElement,
   speakerDevice: document.getElementById('speakerDevice') as HTMLSelectElement,
-  refreshDevices: document.getElementById('refreshDevices')!,
+  refreshDevices: document.getElementById('refreshDevices') as HTMLButtonElement,
   incomingStatus: document.getElementById('incomingStatus')!,
   outgoingStatus: document.getElementById('outgoingStatus')!,
   latencyValue: document.getElementById('latencyValue')!,

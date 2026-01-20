@@ -1692,226 +1692,949 @@ python examples/test_audio_playback.py
 
 ## Phase 3: Gemini API Integration
 
-### Task 3.1: Create Gemini S2ST Client
-**What:** Implement the WebSocket client for Gemini's speech-to-speech translation
+> **Status:** In Progress
+> **Reference:** See `docs/PHASE_3_GEMINI_INTEGRATION.md` for complete implementation plan
+> **API Documentation:** [Gemini Live API](https://ai.google.dev/gemini-api/docs/live)
+
+### Prerequisites
+
+Before starting Phase 3:
+1. Phase 2A (Audio Capture) complete - `MicrophoneCapture`, `SystemAudioCapture`
+2. Phase 2B (Audio Playback) complete - `SpeakerOutput`, `VirtualMicOutput`
+3. Google API key or service account credentials
+4. `google-genai` SDK installed (`pip install google-genai`)
+
+### Audio Format Reference
+
+| Direction | Sample Rate | Format | Notes |
+|-----------|-------------|--------|-------|
+| Mic Input to Gemini | 16kHz | 16-bit PCM mono | Matches MicrophoneCapture |
+| System Audio to Gemini | 24kHz | 16-bit PCM mono | May need resampling |
+| Gemini Output | 24kHz | 16-bit PCM mono | Matches playback classes |
+
+---
+
+### Task 3.1: Create GeminiS2STClient Class
+**What:** Implement the WebSocket client for Gemini Live API speech-to-speech translation
 
 **File to create:** `python/src/gemini/client.py`
 
+> **IMPORTANT:** This implementation is based on the latest `google-genai` SDK patterns.
+> Use `client.aio.live.connect()` with `send_realtime_input()` for audio streaming.
+
 ```python
-"""Gemini S2ST API client."""
+"""
+Gemini S2ST API client.
+
+WebSocket client for real-time speech-to-speech translation using
+the Gemini Live API.
+"""
+
 import asyncio
-import os
+import logging
 from typing import AsyncGenerator, Optional
+from enum import Enum, auto
+from dataclasses import dataclass
+
 from google import genai
 from google.genai import types
 
+logger = logging.getLogger(__name__)
+
+
+class ConnectionState(Enum):
+    """Client connection state."""
+    DISCONNECTED = auto()
+    CONNECTING = auto()
+    CONNECTED = auto()
+    ERROR = auto()
+
+
+@dataclass
+class ClientStats:
+    """Statistics for the Gemini client."""
+    chunks_sent: int = 0
+    bytes_sent: int = 0
+    chunks_received: int = 0
+    bytes_received: int = 0
+    errors: int = 0
+
+
 class GeminiS2STClient:
-    """Client for Gemini Speech-to-Speech Translation API."""
+    """
+    WebSocket client for Gemini Speech-to-Speech Translation API.
 
-    MODEL = "gemini-2.5-flash-s2st-exp-11-2025"
+    Manages connection lifecycle, audio streaming, and response handling.
 
-    def __init__(self, target_language: str = "ja"):
+    Example:
+        ```python
+        async with GeminiS2STClient(target_language="ja-JP") as client:
+            # Send audio
+            await client.send_audio(audio_chunk)
+
+            # Receive translated audio
+            async for translated in client.receive_audio():
+                play(translated)
+        ```
+    """
+
+    # Model for native audio with Live API
+    DEFAULT_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+
+    # Audio format specifications
+    INPUT_SAMPLE_RATE = 16000   # 16kHz input
+    OUTPUT_SAMPLE_RATE = 24000  # 24kHz output
+    INPUT_MIME_TYPE = "audio/pcm;rate=16000"
+
+    def __init__(
+        self,
+        target_language: str = "ja-JP",
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        enable_transcription: bool = False,
+        enable_affective_dialog: bool = True,
+    ):
         """
-        Initialize the client.
+        Initialize the Gemini S2ST client.
 
         Args:
-            target_language: Target language code (e.g., 'ja' for Japanese)
+            target_language: Target language code (e.g., 'ja-JP', 'es-ES')
+            api_key: Google API key (or set GOOGLE_API_KEY env var)
+            model: Model name (defaults to latest native audio model)
+            enable_transcription: Enable input/output transcription
+            enable_affective_dialog: Enable more natural conversation
         """
         self.target_language = target_language
-        self.client = genai.Client()
-        self.session: Optional[genai.live.AsyncSession] = None
+        self.model = model or self.DEFAULT_MODEL
+        self.enable_transcription = enable_transcription
+        self.enable_affective_dialog = enable_affective_dialog
+
+        # Initialize Google GenAI client
+        self._client = genai.Client(api_key=api_key) if api_key else genai.Client()
+        self._session: Optional[genai.live.AsyncSession] = None
+        self._state = ConnectionState.DISCONNECTED
+
+        # Statistics
+        self._stats = ClientStats()
+
+        # Transcription storage (if enabled)
+        self._input_transcript: Optional[str] = None
+        self._output_transcript: Optional[str] = None
+
+        logger.info(f"GeminiS2STClient initialized (target: {target_language})")
+
+    @property
+    def state(self) -> ConnectionState:
+        """Current connection state."""
+        return self._state
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if connected to Gemini API."""
+        return self._state == ConnectionState.CONNECTED
+
+    @property
+    def stats(self) -> dict:
+        """Get client statistics."""
+        return {
+            "chunks_sent": self._stats.chunks_sent,
+            "bytes_sent": self._stats.bytes_sent,
+            "chunks_received": self._stats.chunks_received,
+            "bytes_received": self._stats.bytes_received,
+            "errors": self._stats.errors,
+            "state": self._state.name,
+        }
+
+    def _build_config(self) -> types.LiveConnectConfig:
+        """Build the LiveConnectConfig for the session."""
+        config_dict = {
+            "response_modalities": ["AUDIO"],
+            "speech_config": {
+                "language_code": self.target_language,
+            },
+            "enable_affective_dialog": self.enable_affective_dialog,
+        }
+
+        # Add transcription if enabled
+        if self.enable_transcription:
+            config_dict["input_audio_transcription"] = {}
+            config_dict["output_audio_transcription"] = {}
+
+        return types.LiveConnectConfig(**config_dict)
 
     async def connect(self) -> None:
-        """Establish WebSocket connection to Gemini API."""
-        config = types.LiveConnectConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                language_code=self.target_language
-            ),
-            enable_speech_to_speech_translation=True,
-        )
+        """
+        Establish WebSocket connection to Gemini Live API.
 
-        self.session = await self.client.aio.live.connect(
-            model=self.MODEL,
-            config=config,
-        )
-        print(f"Connected to Gemini S2ST (target: {self.target_language})")
+        Raises:
+            RuntimeError: If already connected
+            Exception: If connection fails
+        """
+        if self._state == ConnectionState.CONNECTED:
+            raise RuntimeError("Already connected")
 
-    async def send_audio(self, audio_chunk: bytes) -> None:
-        """Send audio chunk to the API."""
-        if not self.session:
-            raise RuntimeError("Not connected")
+        self._state = ConnectionState.CONNECTING
+        logger.info(f"Connecting to Gemini API (model: {self.model})...")
 
-        await self.session.send(
-            input=types.LiveClientRealtimeInput(
-                media_chunks=[
-                    types.Blob(data=audio_chunk, mime_type="audio/pcm")
-                ]
+        try:
+            config = self._build_config()
+            self._session = await self._client.aio.live.connect(
+                model=self.model,
+                config=config,
             )
-        )
+            self._state = ConnectionState.CONNECTED
+            logger.info(f"Connected to Gemini S2ST (target: {self.target_language})")
 
-    async def receive_audio(self) -> AsyncGenerator[bytes, None]:
-        """Receive translated audio from the API."""
-        if not self.session:
-            raise RuntimeError("Not connected")
-
-        async for response in self.session.receive():
-            if response.data:
-                yield response.data
+        except Exception as e:
+            self._state = ConnectionState.ERROR
+            self._stats.errors += 1
+            logger.error(f"Connection failed: {e}")
+            raise
 
     async def disconnect(self) -> None:
-        """Close the connection."""
-        if self.session:
-            await self.session.close()
-            self.session = None
-        print("Disconnected from Gemini S2ST")
+        """
+        Close the connection gracefully.
+
+        This is idempotent - calling multiple times is safe.
+        """
+        if self._state == ConnectionState.DISCONNECTED:
+            return
+
+        logger.info("Disconnecting from Gemini API...")
+
+        try:
+            if self._session:
+                await self._session.close()
+                self._session = None
+        except Exception as e:
+            logger.error(f"Error during disconnect: {e}")
+        finally:
+            self._state = ConnectionState.DISCONNECTED
+            logger.info(f"Disconnected. Final stats: {self.stats}")
+
+    async def send_audio(self, audio_chunk: bytes) -> None:
+        """
+        Send audio chunk to Gemini for translation.
+
+        Args:
+            audio_chunk: Raw PCM audio bytes (16-bit, 16kHz, mono)
+
+        Raises:
+            RuntimeError: If not connected
+        """
+        if not self.is_connected or not self._session:
+            raise RuntimeError("Not connected to Gemini API")
+
+        try:
+            await self._session.send_realtime_input(
+                audio=types.Blob(
+                    data=audio_chunk,
+                    mime_type=self.INPUT_MIME_TYPE,
+                )
+            )
+            self._stats.chunks_sent += 1
+            self._stats.bytes_sent += len(audio_chunk)
+
+        except Exception as e:
+            self._stats.errors += 1
+            logger.error(f"Error sending audio: {e}")
+            raise
+
+    async def receive_audio(self) -> AsyncGenerator[bytes, None]:
+        """
+        Receive translated audio from Gemini.
+
+        Yields:
+            Raw PCM audio bytes (16-bit, 24kHz, mono)
+
+        Raises:
+            RuntimeError: If not connected
+        """
+        if not self.is_connected or not self._session:
+            raise RuntimeError("Not connected to Gemini API")
+
+        try:
+            async for response in self._session.receive():
+                # Handle server content with audio
+                if response.server_content:
+                    # Check for transcriptions
+                    if response.server_content.input_transcription:
+                        self._input_transcript = response.server_content.input_transcription.text
+                        logger.debug(f"Input transcript: {self._input_transcript}")
+
+                    if response.server_content.output_transcription:
+                        self._output_transcript = response.server_content.output_transcription.text
+                        logger.debug(f"Output transcript: {self._output_transcript}")
+
+                    # Extract audio from model turn
+                    if response.server_content.model_turn:
+                        for part in response.server_content.model_turn.parts:
+                            if hasattr(part, 'inline_data') and part.inline_data:
+                                audio_data = part.inline_data.data
+                                self._stats.chunks_received += 1
+                                self._stats.bytes_received += len(audio_data)
+                                yield audio_data
+
+        except Exception as e:
+            self._stats.errors += 1
+            logger.error(f"Error receiving audio: {e}")
+            raise
+
+    def get_transcription(self) -> tuple[Optional[str], Optional[str]]:
+        """
+        Get the most recent transcriptions.
+
+        Returns:
+            Tuple of (input_transcript, output_transcript)
+        """
+        return (self._input_transcript, self._output_transcript)
+
+    async def __aenter__(self):
+        """Async context manager entry - connects to API."""
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit - disconnects from API."""
+        await self.disconnect()
 
 
 # Test if run directly
 async def test():
-    print("Testing Gemini S2ST connection...")
-    print("(Make sure GOOGLE_APPLICATION_CREDENTIALS is set)")
+    """Test basic Gemini S2ST connectivity."""
+    import os
 
-    client = GeminiS2STClient(target_language="ja")
+    print("=== Gemini S2ST Client Test ===")
+    print(f"API Key set: {'Yes' if os.environ.get('GOOGLE_API_KEY') else 'No'}")
+
+    client = GeminiS2STClient(
+        target_language="ja-JP",
+        enable_transcription=True,
+    )
 
     try:
         await client.connect()
         print("Connection successful!")
 
         # Send a small test chunk (silence)
-        test_chunk = b'\x00' * 1024
+        test_chunk = b'\x00' * 2048
         await client.send_audio(test_chunk)
         print("Sent test audio chunk")
 
+        # Try to receive (may timeout if no audio to translate)
+        print("Waiting for response (5 second timeout)...")
+        try:
+            async for audio in asyncio.wait_for(
+                client.receive_audio().__anext__(),
+                timeout=5.0
+            ):
+                print(f"Received {len(audio)} bytes of translated audio")
+                break
+        except asyncio.TimeoutError:
+            print("No response received (expected for silence input)")
+
+        print(f"\nStats: {client.stats}")
+
         await client.disconnect()
-        print("Test passed!")
+        print("\nTest passed!")
 
     except Exception as e:
         print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
         raise
+
 
 if __name__ == "__main__":
     asyncio.run(test())
 ```
 
-**Before testing:**
-1. Set up Google Cloud credentials
-2. Enable Vertex AI API in your project
-3. Set `GOOGLE_APPLICATION_CREDENTIALS` environment variable
+**Environment Setup:**
+```bash
+# Option 1: API Key (simplest)
+export GOOGLE_API_KEY=your-api-key-here
+
+# Option 2: Service Account
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+```
 
 **Test it:**
 ```bash
 cd python
 source venv/bin/activate
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/your/credentials.json
 python src/gemini/client.py
 ```
 
 **Done when:**
 - [ ] Connection to Gemini API succeeds
-- [ ] "Connection successful!" is printed
-- [ ] No authentication errors
+- [ ] `send_audio()` completes without error
+- [ ] Connection state tracking works
+- [ ] Statistics are tracked correctly
+- [ ] Context manager (`async with`) works
+- [ ] Full type hints and docstrings present
 
 ---
 
-### Task 3.2: Create Translation Pipeline
-**What:** Connect microphone → Gemini → speaker
+### Task 3.2: Create GeminiConfig and Language Support
+**What:** Configuration management and supported language definitions
 
-**File to create:** `python/src/gemini/pipeline.py`
+**File to create:** `python/src/gemini/config.py`
 
 ```python
-"""Translation pipeline connecting audio input/output with Gemini."""
-import asyncio
-from typing import Optional
+"""
+Gemini API configuration module.
 
-from ..audio.microphone import MicrophoneCapture
-from ..audio.speaker import SpeakerOutput
-from .client import GeminiS2STClient
+Provides configuration classes and supported language definitions
+for the Gemini S2ST client.
+"""
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Optional, Final
+
+
+class SupportedLanguage(Enum):
+    """
+    Supported languages for Gemini S2ST translation.
+
+    Language codes follow BCP-47 format (e.g., 'en-US', 'ja-JP').
+    """
+    ENGLISH_US = "en-US"
+    JAPANESE = "ja-JP"
+    SPANISH_ES = "es-ES"
+    SPANISH_MX = "es-MX"
+    FRENCH = "fr-FR"
+    GERMAN = "de-DE"
+    CHINESE_MANDARIN = "cmn-CN"
+    HINDI = "hi-IN"
+    PORTUGUESE_BR = "pt-BR"
+    KOREAN = "ko-KR"
+    ARABIC = "ar-XA"
+    ITALIAN = "it-IT"
+    RUSSIAN = "ru-RU"
+    DUTCH = "nl-NL"
+
+    @property
+    def display_name(self) -> str:
+        """Human-readable language name."""
+        return LANGUAGE_NAMES.get(self.value, self.value)
+
+
+# Human-readable names for languages
+LANGUAGE_NAMES: Final[dict[str, str]] = {
+    "en-US": "English (US)",
+    "ja-JP": "Japanese",
+    "es-ES": "Spanish (Spain)",
+    "es-MX": "Spanish (Mexico)",
+    "fr-FR": "French",
+    "de-DE": "German",
+    "cmn-CN": "Chinese (Mandarin)",
+    "hi-IN": "Hindi",
+    "pt-BR": "Portuguese (Brazil)",
+    "ko-KR": "Korean",
+    "ar-XA": "Arabic",
+    "it-IT": "Italian",
+    "ru-RU": "Russian",
+    "nl-NL": "Dutch",
+}
+
+
+@dataclass(frozen=True)
+class GeminiConfig:
+    """
+    Immutable configuration for Gemini S2ST client.
+
+    Attributes:
+        target_language: Target translation language
+        model: Gemini model name
+        enable_transcription: Enable input/output transcription
+        enable_affective_dialog: Enable natural conversation mode
+        voice_name: Optional specific voice for output
+    """
+    target_language: SupportedLanguage
+    model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
+    enable_transcription: bool = False
+    enable_affective_dialog: bool = True
+    voice_name: Optional[str] = None
+
+    @property
+    def language_code(self) -> str:
+        """Get the language code string."""
+        return self.target_language.value
+
+
+def get_language_choices() -> list[tuple[str, str]]:
+    """
+    Get language choices for UI selection.
+
+    Returns:
+        List of (code, display_name) tuples
+    """
+    return [(lang.value, lang.display_name) for lang in SupportedLanguage]
+
+
+def validate_language_code(code: str) -> bool:
+    """
+    Check if a language code is supported.
+
+    Args:
+        code: Language code to validate
+
+    Returns:
+        True if supported, False otherwise
+    """
+    return code in [lang.value for lang in SupportedLanguage]
+
+
+# Test if run directly
+if __name__ == "__main__":
+    print("Supported Languages:")
+    for lang in SupportedLanguage:
+        print(f"  {lang.value}: {lang.display_name}")
+
+    print("\nSample Config:")
+    config = GeminiConfig(target_language=SupportedLanguage.JAPANESE)
+    print(f"  Target: {config.language_code}")
+    print(f"  Model: {config.model}")
+```
+
+**Done when:**
+- [ ] SupportedLanguage enum with 10+ languages
+- [ ] GeminiConfig immutable dataclass
+- [ ] Human-readable language names
+- [ ] Validation helper functions
+
+---
+
+### Task 3.3: Create TranslationPipeline Class
+**What:** Connect audio capture -> Gemini -> audio playback
+
+**File to create:** `python/src/routing/pipeline.py`
+
+```python
+"""
+Translation pipeline module.
+
+Orchestrates the full translation flow between audio devices and Gemini API.
+Supports bidirectional translation for Zoom calls.
+"""
+
+import asyncio
+import logging
+from typing import Optional
+from enum import Enum, auto
+from dataclasses import dataclass
+
+from ..audio import (
+    MicrophoneCapture,
+    SystemAudioCapture,
+    SpeakerOutput,
+    VirtualMicOutput,
+    find_microphone_device,
+    find_loopback_device,
+    find_speaker_device,
+    find_virtual_mic_device,
+)
+from ..gemini.client import GeminiS2STClient
+
+logger = logging.getLogger(__name__)
+
+
+class PipelineState(Enum):
+    """Pipeline state."""
+    STOPPED = auto()
+    STARTING = auto()
+    RUNNING = auto()
+    STOPPING = auto()
+    ERROR = auto()
+
+
+class PipelineDirection(Enum):
+    """Direction of translation."""
+    OUTGOING = "outgoing"  # Your voice -> Zoom
+    INCOMING = "incoming"  # Zoom -> Your ears
+    BIDIRECTIONAL = "bidirectional"  # Both
+
+
+@dataclass
+class PipelineStats:
+    """Statistics for the translation pipeline."""
+    audio_chunks_processed: int = 0
+    translation_chunks_received: int = 0
+    errors: int = 0
+    reconnections: int = 0
+
 
 class TranslationPipeline:
-    """Bidirectional translation pipeline."""
+    """
+    Bidirectional translation pipeline.
+
+    Connects audio capture devices to Gemini S2ST API and routes
+    translated audio to output devices.
+
+    Flow diagrams:
+        OUTGOING: Mic -> Gemini -> Virtual Mic (-> Zoom)
+        INCOMING: System Audio (Zoom ->) -> Gemini -> Speakers
+
+    Example:
+        ```python
+        pipeline = TranslationPipeline(target_language="ja-JP")
+
+        # Start outgoing translation (your voice to Zoom)
+        await pipeline.start_outgoing()
+
+        # Or start bidirectional
+        await pipeline.start_bidirectional()
+
+        # Stop when done
+        await pipeline.stop()
+        ```
+    """
 
     def __init__(
         self,
-        source_language: str = "en",
-        target_language: str = "ja",
-        mic_device: Optional[int] = None,
-        speaker_device: Optional[int] = None,
+        target_language: str = "ja-JP",
+        mic_device_index: Optional[int] = None,
+        speaker_device_index: Optional[int] = None,
+        virtual_mic_device_index: Optional[int] = None,
+        system_audio_device_index: Optional[int] = None,
+        enable_transcription: bool = False,
     ):
-        self.source_language = source_language
+        """
+        Initialize the translation pipeline.
+
+        Args:
+            target_language: Target translation language code
+            mic_device_index: PyAudio device index for microphone
+            speaker_device_index: PyAudio device index for speakers
+            virtual_mic_device_index: PyAudio device index for virtual mic
+            system_audio_device_index: PyAudio device index for system audio
+            enable_transcription: Enable transcription for debugging
+        """
         self.target_language = target_language
+        self.enable_transcription = enable_transcription
 
-        self.mic = MicrophoneCapture(device_index=mic_device)
-        self.speaker = SpeakerOutput(device_index=speaker_device)
-        self.gemini = GeminiS2STClient(target_language=target_language)
+        # Device indices (None = use default or auto-detect)
+        self._mic_device_index = mic_device_index
+        self._speaker_device_index = speaker_device_index
+        self._virtual_mic_device_index = virtual_mic_device_index
+        self._system_audio_device_index = system_audio_device_index
 
-        self._running = False
+        # Components (initialized on start)
+        self._mic: Optional[MicrophoneCapture] = None
+        self._system_audio: Optional[SystemAudioCapture] = None
+        self._speaker: Optional[SpeakerOutput] = None
+        self._virtual_mic: Optional[VirtualMicOutput] = None
+        self._outgoing_gemini: Optional[GeminiS2STClient] = None
+        self._incoming_gemini: Optional[GeminiS2STClient] = None
 
-    async def start(self) -> None:
-        """Start the translation pipeline."""
-        print(f"Starting pipeline: {self.source_language} -> {self.target_language}")
+        # State
+        self._state = PipelineState.STOPPED
+        self._direction: Optional[PipelineDirection] = None
+        self._tasks: list[asyncio.Task] = []
+        self._stats = PipelineStats()
 
-        # Connect to Gemini
-        await self.gemini.connect()
+        logger.info(f"TranslationPipeline initialized (target: {target_language})")
 
-        # Start audio
-        self.mic.start()
-        self.speaker.start()
+    @property
+    def state(self) -> PipelineState:
+        """Current pipeline state."""
+        return self._state
 
-        self._running = True
+    @property
+    def is_running(self) -> bool:
+        """Check if pipeline is running."""
+        return self._state == PipelineState.RUNNING
 
-        # Run send and receive concurrently
-        await asyncio.gather(
-            self._send_loop(),
-            self._receive_loop(),
+    @property
+    def stats(self) -> dict:
+        """Get pipeline statistics."""
+        return {
+            "audio_chunks_processed": self._stats.audio_chunks_processed,
+            "translation_chunks_received": self._stats.translation_chunks_received,
+            "errors": self._stats.errors,
+            "reconnections": self._stats.reconnections,
+            "state": self._state.name,
+            "direction": self._direction.value if self._direction else None,
+        }
+
+    async def start_outgoing(self) -> None:
+        """
+        Start outgoing translation pipeline.
+
+        Flow: Mic -> Gemini -> Virtual Mic (-> Zoom)
+        """
+        await self._start(PipelineDirection.OUTGOING)
+
+    async def start_incoming(self) -> None:
+        """
+        Start incoming translation pipeline.
+
+        Flow: System Audio (Zoom ->) -> Gemini -> Speakers
+        """
+        await self._start(PipelineDirection.INCOMING)
+
+    async def start_bidirectional(self) -> None:
+        """
+        Start both pipelines concurrently.
+
+        This is the full Zoom translation mode.
+        """
+        await self._start(PipelineDirection.BIDIRECTIONAL)
+
+    async def _start(self, direction: PipelineDirection) -> None:
+        """Internal start method for all directions."""
+        if self._state != PipelineState.STOPPED:
+            raise RuntimeError(f"Cannot start: pipeline is {self._state.name}")
+
+        self._state = PipelineState.STARTING
+        self._direction = direction
+
+        logger.info(f"Starting {direction.value} translation pipeline...")
+
+        try:
+            if direction in (PipelineDirection.OUTGOING, PipelineDirection.BIDIRECTIONAL):
+                await self._setup_outgoing()
+
+            if direction in (PipelineDirection.INCOMING, PipelineDirection.BIDIRECTIONAL):
+                await self._setup_incoming()
+
+            # Start processing tasks
+            if direction in (PipelineDirection.OUTGOING, PipelineDirection.BIDIRECTIONAL):
+                self._tasks.append(
+                    asyncio.create_task(self._outgoing_send_loop(), name="outgoing_send")
+                )
+                self._tasks.append(
+                    asyncio.create_task(self._outgoing_receive_loop(), name="outgoing_receive")
+                )
+
+            if direction in (PipelineDirection.INCOMING, PipelineDirection.BIDIRECTIONAL):
+                self._tasks.append(
+                    asyncio.create_task(self._incoming_send_loop(), name="incoming_send")
+                )
+                self._tasks.append(
+                    asyncio.create_task(self._incoming_receive_loop(), name="incoming_receive")
+                )
+
+            self._state = PipelineState.RUNNING
+            logger.info(f"Pipeline running ({direction.value})")
+
+            # Wait for all tasks (they run until stop() is called)
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+
+        except Exception as e:
+            self._state = PipelineState.ERROR
+            self._stats.errors += 1
+            logger.error(f"Pipeline error: {e}")
+            raise
+
+    async def _setup_outgoing(self) -> None:
+        """Set up outgoing translation components."""
+        # Auto-detect virtual mic if not specified
+        if self._virtual_mic_device_index is None:
+            virtual_mic = find_virtual_mic_device()
+            if virtual_mic:
+                self._virtual_mic_device_index = virtual_mic.index
+                logger.info(f"Auto-detected virtual mic: {virtual_mic.name}")
+            else:
+                logger.warning("No virtual mic found - outgoing audio will play to speakers")
+
+        # Initialize components
+        self._mic = MicrophoneCapture(device_index=self._mic_device_index)
+        self._outgoing_gemini = GeminiS2STClient(
+            target_language=self.target_language,
+            enable_transcription=self.enable_transcription,
         )
 
-    async def _send_loop(self) -> None:
-        """Send microphone audio to Gemini."""
-        while self._running:
+        # Use virtual mic if available, otherwise speakers
+        if self._virtual_mic_device_index is not None:
+            self._virtual_mic = VirtualMicOutput(device_index=self._virtual_mic_device_index)
+        else:
+            self._speaker = SpeakerOutput(device_index=self._speaker_device_index)
+
+        # Start components
+        await self._mic.start()
+        await self._outgoing_gemini.connect()
+
+        if self._virtual_mic:
+            await self._virtual_mic.start()
+        elif self._speaker and self._direction == PipelineDirection.OUTGOING:
+            await self._speaker.start()
+
+    async def _setup_incoming(self) -> None:
+        """Set up incoming translation components."""
+        # Auto-detect system audio device if not specified
+        if self._system_audio_device_index is None:
+            loopback = find_loopback_device()
+            if loopback:
+                self._system_audio_device_index = loopback.index
+                logger.info(f"Auto-detected loopback device: {loopback.name}")
+            else:
+                raise RuntimeError("No loopback device found for system audio capture")
+
+        # Initialize components
+        self._system_audio = SystemAudioCapture(device_index=self._system_audio_device_index)
+        self._incoming_gemini = GeminiS2STClient(
+            target_language=self.target_language,
+            enable_transcription=self.enable_transcription,
+        )
+
+        if not self._speaker:
+            self._speaker = SpeakerOutput(device_index=self._speaker_device_index)
+
+        # Start components
+        await self._system_audio.start()
+        await self._incoming_gemini.connect()
+        await self._speaker.start()
+
+    async def _outgoing_send_loop(self) -> None:
+        """Send microphone audio to Gemini (outgoing pipeline)."""
+        logger.debug("Outgoing send loop started")
+        while self._state == PipelineState.RUNNING:
             try:
-                chunk = self.mic.read_chunk()
-                await self.gemini.send_audio(chunk)
+                chunk = await self._mic.read_chunk(timeout=0.1)
+                await self._outgoing_gemini.send_audio(chunk.data)
+                self._stats.audio_chunks_processed += 1
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
             except Exception as e:
-                print(f"Send error: {e}")
+                self._stats.errors += 1
+                logger.error(f"Outgoing send error: {e}")
                 await asyncio.sleep(0.1)
 
-    async def _receive_loop(self) -> None:
-        """Receive translated audio from Gemini and play it."""
+    async def _outgoing_receive_loop(self) -> None:
+        """Receive translated audio from Gemini (outgoing pipeline)."""
+        logger.debug("Outgoing receive loop started")
         try:
-            async for audio_chunk in self.gemini.receive_audio():
-                if not self._running:
+            async for audio_chunk in self._outgoing_gemini.receive_audio():
+                if self._state != PipelineState.RUNNING:
                     break
-                self.speaker.play(audio_chunk)
+
+                self._stats.translation_chunks_received += 1
+
+                # Route to virtual mic or speakers
+                if self._virtual_mic:
+                    self._virtual_mic.write_chunk_nowait(audio_chunk)
+                elif self._speaker:
+                    self._speaker.write_chunk_nowait(audio_chunk)
+
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
-            print(f"Receive error: {e}")
+            self._stats.errors += 1
+            logger.error(f"Outgoing receive error: {e}")
+
+    async def _incoming_send_loop(self) -> None:
+        """Send system audio to Gemini (incoming pipeline)."""
+        logger.debug("Incoming send loop started")
+        while self._state == PipelineState.RUNNING:
+            try:
+                chunk = await self._system_audio.read_chunk(timeout=0.1)
+                await self._incoming_gemini.send_audio(chunk.data)
+                self._stats.audio_chunks_processed += 1
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self._stats.errors += 1
+                logger.error(f"Incoming send error: {e}")
+                await asyncio.sleep(0.1)
+
+    async def _incoming_receive_loop(self) -> None:
+        """Receive translated audio from Gemini (incoming pipeline)."""
+        logger.debug("Incoming receive loop started")
+        try:
+            async for audio_chunk in self._incoming_gemini.receive_audio():
+                if self._state != PipelineState.RUNNING:
+                    break
+
+                self._stats.translation_chunks_received += 1
+                self._speaker.write_chunk_nowait(audio_chunk)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            self._stats.errors += 1
+            logger.error(f"Incoming receive error: {e}")
 
     async def stop(self) -> None:
-        """Stop the translation pipeline."""
-        self._running = False
-        self.mic.stop()
-        self.speaker.stop()
-        await self.gemini.disconnect()
-        print("Pipeline stopped")
+        """
+        Stop the translation pipeline gracefully.
+
+        Cancels all tasks and cleans up resources.
+        """
+        if self._state == PipelineState.STOPPED:
+            return
+
+        self._state = PipelineState.STOPPING
+        logger.info("Stopping translation pipeline...")
+
+        # Cancel all tasks
+        for task in self._tasks:
+            task.cancel()
+
+        # Wait for tasks to complete
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
+
+        # Clean up components
+        if self._mic:
+            await self._mic.stop()
+            self._mic = None
+
+        if self._system_audio:
+            await self._system_audio.stop()
+            self._system_audio = None
+
+        if self._speaker:
+            await self._speaker.stop()
+            self._speaker = None
+
+        if self._virtual_mic:
+            await self._virtual_mic.stop()
+            self._virtual_mic = None
+
+        if self._outgoing_gemini:
+            await self._outgoing_gemini.disconnect()
+            self._outgoing_gemini = None
+
+        if self._incoming_gemini:
+            await self._incoming_gemini.disconnect()
+            self._incoming_gemini = None
+
+        self._state = PipelineState.STOPPED
+        self._direction = None
+        logger.info(f"Pipeline stopped. Final stats: {self.stats}")
 
 
 # Test if run directly
 async def main():
+    """Test the translation pipeline."""
+    import sys
+
     print("=== Translation Pipeline Test ===")
-    print("This will translate your speech from English to Japanese")
+    print("This will translate your speech to Japanese")
+    print("Use headphones to avoid feedback!")
     print("Press Ctrl+C to stop\n")
 
+    # For testing, just use outgoing (mic -> speakers)
     pipeline = TranslationPipeline(
-        source_language="en",
-        target_language="ja",
+        target_language="ja-JP",
+        enable_transcription=True,
     )
 
     try:
-        await pipeline.start()
+        await pipeline.start_outgoing()
     except KeyboardInterrupt:
-        print("\nStopping...")
+        print("\n\nStopping...")
     finally:
         await pipeline.stop()
+        print(f"\nFinal stats: {pipeline.stats}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -1921,15 +2644,440 @@ if __name__ == "__main__":
 ```bash
 cd python
 source venv/bin/activate
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/your/credentials.json
-python -m src.gemini.pipeline
+export GOOGLE_API_KEY=your-key
+python -m src.routing.pipeline
 # Speak English, hear Japanese!
 ```
 
 **Done when:**
-- [ ] Can speak into microphone
-- [ ] Hear translated audio in target language
-- [ ] No crashes when running for 30+ seconds
+- [ ] Outgoing pipeline (Mic -> Gemini -> Virtual Mic) works
+- [ ] Incoming pipeline (System Audio -> Gemini -> Speakers) works
+- [ ] Bidirectional mode runs both concurrently
+- [ ] Auto-detects audio devices
+- [ ] Graceful shutdown with cleanup
+- [ ] Statistics tracking
+- [ ] Full type hints and docstrings
+
+---
+
+### Task 3.4: Create Error Handling Module
+**What:** Custom exceptions and reconnection logic
+
+**File to create:** `python/src/gemini/errors.py`
+
+```python
+"""
+Gemini error handling module.
+
+Provides custom exceptions and reconnection handling utilities.
+"""
+
+import asyncio
+import logging
+from typing import Callable, Awaitable, Optional
+
+logger = logging.getLogger(__name__)
+
+
+# Custom Exceptions
+
+class GeminiError(Exception):
+    """Base exception for all Gemini-related errors."""
+    pass
+
+
+class GeminiConnectionError(GeminiError):
+    """Failed to connect to Gemini API."""
+    pass
+
+
+class GeminiAuthenticationError(GeminiError):
+    """Authentication failed - invalid or missing credentials."""
+    pass
+
+
+class GeminiRateLimitError(GeminiError):
+    """API rate limit exceeded."""
+    pass
+
+
+class GeminiSessionExpiredError(GeminiError):
+    """Session timeout exceeded (10 minute limit)."""
+    pass
+
+
+class GeminiAudioError(GeminiError):
+    """Error processing audio data."""
+    pass
+
+
+# Reconnection Handler
+
+class ReconnectionHandler:
+    """
+    Handles automatic reconnection with exponential backoff.
+
+    Example:
+        ```python
+        handler = ReconnectionHandler()
+        success = await handler.reconnect_with_backoff(client.connect)
+        ```
+    """
+
+    MAX_RETRIES: int = 5
+    BASE_DELAY: float = 1.0  # seconds
+    MAX_DELAY: float = 30.0  # seconds
+
+    def __init__(
+        self,
+        max_retries: Optional[int] = None,
+        base_delay: Optional[float] = None,
+        max_delay: Optional[float] = None,
+    ):
+        """
+        Initialize reconnection handler.
+
+        Args:
+            max_retries: Maximum reconnection attempts
+            base_delay: Initial delay between retries
+            max_delay: Maximum delay between retries
+        """
+        self.max_retries = max_retries or self.MAX_RETRIES
+        self.base_delay = base_delay or self.BASE_DELAY
+        self.max_delay = max_delay or self.MAX_DELAY
+        self._attempt = 0
+
+    async def reconnect_with_backoff(
+        self,
+        connect_func: Callable[[], Awaitable[None]],
+    ) -> bool:
+        """
+        Attempt reconnection with exponential backoff.
+
+        Args:
+            connect_func: Async function to call for connection
+
+        Returns:
+            True if reconnection successful, False if max retries exceeded
+        """
+        self._attempt = 0
+
+        while self._attempt < self.max_retries:
+            self._attempt += 1
+
+            try:
+                logger.info(f"Reconnection attempt {self._attempt}/{self.max_retries}")
+                await connect_func()
+                logger.info("Reconnection successful")
+                return True
+
+            except Exception as e:
+                delay = min(
+                    self.base_delay * (2 ** (self._attempt - 1)),
+                    self.max_delay
+                )
+                logger.warning(f"Reconnection failed: {e}. Retrying in {delay:.1f}s")
+                await asyncio.sleep(delay)
+
+        logger.error(f"Max reconnection attempts ({self.max_retries}) exceeded")
+        return False
+
+    @property
+    def attempts(self) -> int:
+        """Number of reconnection attempts made."""
+        return self._attempt
+
+
+# Test if run directly
+if __name__ == "__main__":
+    print("Gemini Error Types:")
+    for exc in [GeminiError, GeminiConnectionError, GeminiAuthenticationError,
+                GeminiRateLimitError, GeminiSessionExpiredError, GeminiAudioError]:
+        print(f"  {exc.__name__}: {exc.__doc__}")
+```
+
+**Done when:**
+- [ ] Custom exception hierarchy defined
+- [ ] ReconnectionHandler with exponential backoff
+- [ ] Proper logging for error scenarios
+
+---
+
+### Task 3.5: Update Module Exports
+**What:** Update __init__.py files with new exports
+
+**File to update:** `python/src/gemini/__init__.py`
+
+```python
+"""
+Gemini API integration module.
+
+Handles WebSocket connection to Vertex AI Gemini Live API
+for speech-to-speech translation.
+"""
+
+from typing import Final
+
+# Gemini API configuration
+GEMINI_MODEL: Final[str] = "gemini-2.5-flash-native-audio-preview-12-2025"
+GEMINI_API_VERSION: Final[str] = "v1alpha"
+
+# Import client
+from .client import (
+    GeminiS2STClient,
+    ConnectionState,
+    ClientStats,
+)
+
+# Import config
+from .config import (
+    GeminiConfig,
+    SupportedLanguage,
+    LANGUAGE_NAMES,
+    get_language_choices,
+    validate_language_code,
+)
+
+# Import errors
+from .errors import (
+    GeminiError,
+    GeminiConnectionError,
+    GeminiAuthenticationError,
+    GeminiRateLimitError,
+    GeminiSessionExpiredError,
+    GeminiAudioError,
+    ReconnectionHandler,
+)
+
+__all__ = [
+    # Constants
+    "GEMINI_MODEL",
+    "GEMINI_API_VERSION",
+    # Client
+    "GeminiS2STClient",
+    "ConnectionState",
+    "ClientStats",
+    # Config
+    "GeminiConfig",
+    "SupportedLanguage",
+    "LANGUAGE_NAMES",
+    "get_language_choices",
+    "validate_language_code",
+    # Errors
+    "GeminiError",
+    "GeminiConnectionError",
+    "GeminiAuthenticationError",
+    "GeminiRateLimitError",
+    "GeminiSessionExpiredError",
+    "GeminiAudioError",
+    "ReconnectionHandler",
+]
+```
+
+**File to update:** `python/src/routing/__init__.py`
+
+```python
+"""
+Audio routing module.
+
+Handles routing of audio between different sources and destinations:
+- Microphone -> Gemini -> Virtual Mic
+- System Audio -> Gemini -> Speakers
+"""
+
+from .pipeline import (
+    TranslationPipeline,
+    PipelineState,
+    PipelineDirection,
+    PipelineStats,
+)
+
+__all__ = [
+    "TranslationPipeline",
+    "PipelineState",
+    "PipelineDirection",
+    "PipelineStats",
+]
+```
+
+**Done when:**
+- [ ] All new classes exported from gemini module
+- [ ] All new classes exported from routing module
+- [ ] No import errors
+
+---
+
+### Task 3.6: Create Test Script
+**What:** Example script demonstrating Gemini S2ST integration
+
+**File to create:** `python/examples/test_gemini_translation.py`
+
+```python
+"""
+Test script for Gemini Speech-to-Speech Translation.
+
+Demonstrates usage of the GeminiS2STClient and TranslationPipeline.
+
+Usage:
+    python examples/test_gemini_translation.py --target ja-JP
+    python examples/test_gemini_translation.py --test connection
+    python examples/test_gemini_translation.py --list-languages
+
+Requirements:
+    - GOOGLE_API_KEY environment variable set
+    - Microphone access
+    - Speaker output
+    - (Optional) Virtual audio device for Zoom integration
+"""
+
+import asyncio
+import argparse
+import logging
+import os
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from gemini import (
+    GeminiS2STClient,
+    SupportedLanguage,
+    get_language_choices,
+)
+from routing import TranslationPipeline
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+def list_languages():
+    """List all supported languages."""
+    print("\nSupported Languages:")
+    print("-" * 40)
+    for code, name in get_language_choices():
+        print(f"  {code:12} {name}")
+    print()
+
+
+async def test_connection():
+    """Test basic API connectivity."""
+    print("\n=== Testing Gemini API Connection ===\n")
+
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        print("ERROR: GOOGLE_API_KEY environment variable not set")
+        print("Set it with: export GOOGLE_API_KEY=your-key")
+        return False
+
+    print(f"API Key: {'*' * 20}...{api_key[-4:]}")
+
+    client = GeminiS2STClient(target_language="en-US")
+
+    try:
+        await client.connect()
+        print("SUCCESS: Connected to Gemini API")
+
+        # Send test chunk
+        test_audio = b'\x00' * 2048
+        await client.send_audio(test_audio)
+        print("SUCCESS: Sent test audio")
+
+        await client.disconnect()
+        print("SUCCESS: Disconnected cleanly")
+        print(f"\nStats: {client.stats}")
+        return True
+
+    except Exception as e:
+        print(f"FAILED: {e}")
+        return False
+
+
+async def test_outgoing_translation(target_language: str):
+    """Test microphone -> Gemini -> speakers translation."""
+    print(f"\n=== Testing Outgoing Translation ({target_language}) ===")
+    print("Speak into your microphone - you should hear translated audio")
+    print("Use headphones to avoid feedback!")
+    print("Press Ctrl+C to stop\n")
+
+    pipeline = TranslationPipeline(
+        target_language=target_language,
+        enable_transcription=True,
+    )
+
+    try:
+        await pipeline.start_outgoing()
+    except KeyboardInterrupt:
+        print("\n\nStopping...")
+    finally:
+        await pipeline.stop()
+        print(f"\nFinal stats: {pipeline.stats}")
+
+
+async def main():
+    parser = argparse.ArgumentParser(
+        description="Test Gemini Speech-to-Speech Translation"
+    )
+    parser.add_argument(
+        "--target", "-t",
+        default="ja-JP",
+        help="Target language code (default: ja-JP)"
+    )
+    parser.add_argument(
+        "--test",
+        choices=["connection", "translation"],
+        default="translation",
+        help="Test type to run"
+    )
+    parser.add_argument(
+        "--list-languages", "-l",
+        action="store_true",
+        help="List supported languages"
+    )
+
+    args = parser.parse_args()
+
+    if args.list_languages:
+        list_languages()
+        return
+
+    if args.test == "connection":
+        success = await test_connection()
+        sys.exit(0 if success else 1)
+
+    elif args.test == "translation":
+        await test_outgoing_translation(args.target)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**Test it:**
+```bash
+# List supported languages
+python examples/test_gemini_translation.py --list-languages
+
+# Test API connection
+python examples/test_gemini_translation.py --test connection
+
+# Test translation to Japanese
+python examples/test_gemini_translation.py --target ja-JP
+
+# Test translation to Spanish
+python examples/test_gemini_translation.py --target es-ES
+```
+
+**Done when:**
+- [ ] Script runs without errors
+- [ ] Connection test works
+- [ ] Translation test produces audio output
+- [ ] Language selection from CLI works
+- [ ] Clear error messages for common issues
 
 ---
 
