@@ -10,8 +10,6 @@ Authentication via Application Default Credentials (ADC).
 
 from typing import Final
 
-# Vertex AI Gemini S2ST configuration
-DEFAULT_MODEL: Final[str] = "gemini-2.5-flash-s2st-11-2025-exp"  # Free S2ST preview model
 GEMINI_API_VERSION: Final[str] = "v1"
 
 # Import configuration classes
@@ -46,7 +44,6 @@ from .errors import (
 
 __all__ = [
     # Constants
-    "DEFAULT_MODEL",
     "GEMINI_API_VERSION",
     # Config
     "GeminiConfig",

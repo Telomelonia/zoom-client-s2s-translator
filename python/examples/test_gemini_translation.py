@@ -30,6 +30,9 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
+
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -146,7 +149,7 @@ async def test_connection(target_language: str) -> bool:
     try:
         # Create config
         lang = SupportedLanguage.from_code(target_language)
-        config = GeminiConfig(target_language=lang)
+        config = GeminiConfig.from_env(target_language=lang)
 
         print(f"Target language: {config.language_display_name}")
         print(f"Model: {config.model}")
@@ -191,7 +194,7 @@ async def test_outgoing_translation(
     try:
         # Create config
         lang = SupportedLanguage.from_code(target_language)
-        config = GeminiConfig(target_language=lang, enable_transcription=True)
+        config = GeminiConfig.from_env(target_language=lang, enable_transcription=True)
 
         print(f"Target language: {config.language_display_name}")
         print(f"Duration: {duration} seconds")
@@ -301,7 +304,7 @@ async def test_full_pipeline(target_language: str, duration: int = 30) -> bool:
 
         # Create config
         lang = SupportedLanguage.from_code(target_language)
-        config = GeminiConfig(target_language=lang)
+        config = GeminiConfig.from_env(target_language=lang)
 
         print(f"Target language: {config.language_display_name}")
         print(f"Virtual mic: {virtual_mic.name}")

@@ -88,7 +88,7 @@ class GeminiS2STClient:
 
     Example:
         ```python
-        config = GeminiConfig(target_language=SupportedLanguage.JAPANESE)
+        config = GeminiConfig.from_env(target_language=SupportedLanguage.JAPANESE)
         client = GeminiS2STClient(config)
 
         async with client:

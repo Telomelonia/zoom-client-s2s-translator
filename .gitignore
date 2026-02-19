@@ -130,3 +130,6 @@ gcp-key.json
 # API keys
 .api-keys
 secrets/
+
+# Documentation (internal project tracking)
+docs/

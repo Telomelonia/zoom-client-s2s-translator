@@ -6,10 +6,15 @@ Run this AFTER enabling Vertex AI API.
 
 import asyncio
 import os
+from pathlib import Path
 
 # Suppress warnings for cleaner output
 import warnings
 warnings.filterwarnings("ignore")
+
+# Load .env file
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent / ".env")
 
 async def test_s2st_access():
     """Test if we can connect to the S2ST model."""
@@ -29,11 +34,17 @@ async def test_s2st_access():
         return False
 
     # Check GCP project
-    project = os.environ.get("GOOGLE_CLOUD_PROJECT", "telomelonia")
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+    if not project:
+        print("✗ GOOGLE_CLOUD_PROJECT not set in .env")
+        return False
     print(f"✓ Using GCP project: {project}")
 
-    # S2ST model name
-    MODEL = "gemini-2.5-flash-s2st-exp-11-2025"
+    # S2ST model name (must be set in .env)
+    MODEL = os.environ.get("GEMINI_MODEL")
+    if not MODEL:
+        print("✗ GEMINI_MODEL not set in .env")
+        return False
     print(f"✓ Testing model: {MODEL}")
 
     print("\n" + "-" * 50)

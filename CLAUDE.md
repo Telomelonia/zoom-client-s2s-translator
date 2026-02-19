@@ -31,7 +31,7 @@ See `docs/ORCHESTRATION_PROTOCOL.md` for full details.
 - **Frontend:** Electron (TypeScript)
 - **Backend:** Python (FastAPI or direct IPC)
 - **Translation API:** Vertex AI Gemini Live API - Speech-to-Speech Translation
-- **Model:** `gemini-2.5-flash-s2st-exp-11-2025`
+- **Model:** Set via `GEMINI_MODEL` env var (see `.env.example`)
 - **Audio:** PyAudio (input), electron-audio-loopback (system capture)
 - **Virtual Audio:** BlackHole (macOS), VB-Audio Virtual Cable (Windows)
 - **Packaging:** electron-builder (DMG + EXE)

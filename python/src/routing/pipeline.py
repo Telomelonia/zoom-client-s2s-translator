@@ -85,7 +85,7 @@ class TranslationPipeline:
     Example:
         ```python
         # Outgoing translation (your voice to Zoom in Japanese)
-        config = GeminiConfig(target_language=SupportedLanguage.JAPANESE)
+        config = GeminiConfig.from_env(target_language=SupportedLanguage.JAPANESE)
         pipeline = TranslationPipeline(config)
 
         async with pipeline:

@@ -5,9 +5,12 @@ Configuration dataclasses and supported language definitions for
 speech-to-speech translation.
 """
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
+
+from .errors import GeminiConfigurationError
 
 
 class SupportedLanguage(Enum):
@@ -151,7 +154,7 @@ class GeminiConfig:
     """
 
     target_language: SupportedLanguage
-    model: str = "gemini-2.5-flash-s2st-exp-11-2025"  # Vertex AI S2ST model (private experimental)
+    model: str  # Vertex AI S2ST model — set via GEMINI_MODEL env var
     enable_transcription: bool = False
     enable_affective_dialog: bool = True
     voice_name: Optional[str] = None
@@ -168,6 +171,26 @@ class GeminiConfig:
                 f"target_language must be a SupportedLanguage enum value, "
                 f"got {type(self.target_language)}"
             )
+        if not self.model:
+            raise GeminiConfigurationError(
+                "model is required. Use GeminiConfig.from_env() or pass model explicitly."
+            )
+
+    @classmethod
+    def from_env(cls, **kwargs) -> "GeminiConfig":
+        """
+        Create GeminiConfig reading GEMINI_MODEL from environment.
+
+        Raises:
+            GeminiConfigurationError: If GEMINI_MODEL is not set.
+        """
+        model = os.environ.get("GEMINI_MODEL")
+        if not model:
+            raise GeminiConfigurationError(
+                "GEMINI_MODEL environment variable is not set. "
+                "Set it in your .env file."
+            )
+        return cls(model=model, **kwargs)
 
     @property
     def language_code(self) -> str:
