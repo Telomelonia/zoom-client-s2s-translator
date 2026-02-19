@@ -109,11 +109,11 @@ All major decisions must be logged in PROJECT_STATUS.md with:
 - Alternatives considered
 
 ## Current Status
-**Phase:** Audio Pipeline - Phase 2B (Playback)
-**Last Completed:** Phase 2A - Audio Capture (commit fd4334e)
-**Progress:** 35%
-**API Status:** Gemini S2ST available (Private Preview, FREE)
-**Blockers:** None
+**Phase:** Gemini Integration (Phase 3) - 80% complete
+**Last Completed:** Bidirectional translation CLI (`translate.py`) with upstream/downstream modes
+**Progress:** 65%
+**API Status:** Gemini S2ST available (Private Preview, FREE) - connection verified
+**Blockers:** BlackHole not visible in PyAudio (needs Mac reboot for kernel driver)
 
 ## Commands for Manager Agent
 When user says:

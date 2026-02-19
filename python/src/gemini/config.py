@@ -21,50 +21,49 @@ class SupportedLanguage(Enum):
     the Gemini Live API for speech-to-speech translation.
     """
 
-    # Major languages
-    ENGLISH_US = "en-US"
-    JAPANESE = "ja-JP"
-    SPANISH = "es-ES"
-    FRENCH = "fr-FR"
-    GERMAN = "de-DE"
-    ITALIAN = "it-IT"
-    PORTUGUESE_BR = "pt-BR"
-    PORTUGUESE_PT = "pt-PT"
-    RUSSIAN = "ru-RU"
+    # Major languages (short codes as required by Gemini Live API)
+    ENGLISH_US = "en"
+    JAPANESE = "ja"
+    SPANISH = "es"
+    FRENCH = "fr"
+    GERMAN = "de"
+    ITALIAN = "it"
+    PORTUGUESE = "pt"
+    RUSSIAN = "ru"
 
     # Asian languages
-    CHINESE_MANDARIN = "cmn-CN"
-    CHINESE_CANTONESE = "yue-HK"
-    KOREAN = "ko-KR"
-    HINDI = "hi-IN"
-    BENGALI = "bn-IN"
-    TAMIL = "ta-IN"
-    TELUGU = "te-IN"
-    MARATHI = "mr-IN"
-    GUJARATI = "gu-IN"
-    THAI = "th-TH"
-    VIETNAMESE = "vi-VN"
-    INDONESIAN = "id-ID"
-    MALAY = "ms-MY"
+    CHINESE_MANDARIN = "cmn"
+    CHINESE_CANTONESE = "yue"
+    KOREAN = "ko"
+    HINDI = "hi"
+    BENGALI = "bn"
+    TAMIL = "ta"
+    TELUGU = "te"
+    MARATHI = "mr"
+    GUJARATI = "gu"
+    THAI = "th"
+    VIETNAMESE = "vi"
+    INDONESIAN = "id"
+    MALAY = "ms"
 
     # Middle Eastern languages
-    ARABIC = "ar-XA"
-    HEBREW = "he-IL"
-    TURKISH = "tr-TR"
-    PERSIAN = "fa-IR"
+    ARABIC = "ar"
+    HEBREW = "he"
+    TURKISH = "tr"
+    PERSIAN = "fa"
 
     # European languages
-    DUTCH = "nl-NL"
-    POLISH = "pl-PL"
-    SWEDISH = "sv-SE"
-    NORWEGIAN = "nb-NO"
-    DANISH = "da-DK"
-    FINNISH = "fi-FI"
-    CZECH = "cs-CZ"
-    HUNGARIAN = "hu-HU"
-    ROMANIAN = "ro-RO"
-    GREEK = "el-GR"
-    UKRAINIAN = "uk-UA"
+    DUTCH = "nl"
+    POLISH = "pl"
+    SWEDISH = "sv"
+    NORWEGIAN = "nb"
+    DANISH = "da"
+    FINNISH = "fi"
+    CZECH = "cs"
+    HUNGARIAN = "hu"
+    ROMANIAN = "ro"
+    GREEK = "el"
+    UKRAINIAN = "uk"
 
     @property
     def display_name(self) -> str:
@@ -73,7 +72,7 @@ class SupportedLanguage(Enum):
 
     @property
     def language_code(self) -> str:
-        """Get the BCP-47 language code."""
+        """Get the short language code used by the Gemini Live API."""
         return self.value
 
     @classmethod
@@ -81,8 +80,10 @@ class SupportedLanguage(Enum):
         """
         Create SupportedLanguage from language code.
 
+        Accepts both short codes ("ja") and BCP-47 codes ("ja-JP").
+
         Args:
-            code: BCP-47 language code (e.g., "ja-JP")
+            code: Language code (e.g., "ja" or "ja-JP")
 
         Returns:
             SupportedLanguage enum value
@@ -90,8 +91,14 @@ class SupportedLanguage(Enum):
         Raises:
             ValueError: If language code is not supported
         """
+        # Try exact match first (short code)
         for lang in cls:
             if lang.value == code:
+                return lang
+        # Try matching the prefix of a BCP-47 code (e.g., "ja-JP" -> "ja")
+        short = code.split("-")[0]
+        for lang in cls:
+            if lang.value == short:
                 return lang
         raise ValueError(
             f"Language code '{code}' is not supported. "
@@ -107,8 +114,7 @@ _LANGUAGE_DISPLAY_NAMES = {
     SupportedLanguage.FRENCH: "French",
     SupportedLanguage.GERMAN: "German",
     SupportedLanguage.ITALIAN: "Italian",
-    SupportedLanguage.PORTUGUESE_BR: "Portuguese (Brazil)",
-    SupportedLanguage.PORTUGUESE_PT: "Portuguese (Portugal)",
+    SupportedLanguage.PORTUGUESE: "Portuguese",
     SupportedLanguage.RUSSIAN: "Russian",
     SupportedLanguage.CHINESE_MANDARIN: "Chinese (Mandarin)",
     SupportedLanguage.CHINESE_CANTONESE: "Chinese (Cantonese)",
@@ -156,7 +162,6 @@ class GeminiConfig:
     target_language: SupportedLanguage
     model: str  # Vertex AI S2ST model — set via GEMINI_MODEL env var
     enable_transcription: bool = False
-    enable_affective_dialog: bool = True
     voice_name: Optional[str] = None
     system_instruction: Optional[str] = None
 
@@ -246,7 +251,7 @@ def get_language_by_name(name: str) -> SupportedLanguage | None:
         ```python
         lang = get_language_by_name("Japanese")
         if lang:
-            print(lang.language_code)  # "ja-JP"
+            print(lang.language_code)  # "ja"
         ```
     """
     name_lower = name.lower()

@@ -224,11 +224,10 @@ class GeminiS2STClient:
                 )
             )
 
-        # Build config
+        # Build config (matches the working test_s2st_access.py pattern)
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=speech_config,
-            enable_affective_dialog=self._config.enable_affective_dialog,
         )
 
         # Optional transcription
@@ -396,12 +395,10 @@ class GeminiS2STClient:
                             self._output_transcription.append(part.text)
 
                 # Process input transcription (if enabled)
-                if (
-                    self._config.enable_transcription
-                    and response.input_transcription
-                ):
+                input_transcription = getattr(response, "input_transcription", None)
+                if self._config.enable_transcription and input_transcription:
                     self._input_transcription.append(
-                        response.input_transcription.text
+                        input_transcription.text
                     )
 
         except asyncio.CancelledError:

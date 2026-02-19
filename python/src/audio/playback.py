@@ -22,6 +22,7 @@ from . import (
     CHUNK_SIZE,
     BIT_DEPTH,
 )
+from .utils import resample_audio
 
 logger = logging.getLogger(__name__)
 
@@ -377,11 +378,8 @@ class SpeakerOutput(BasePlaybackDevice):
     """
     Plays audio through physical speakers.
 
-    Optimized for playing translated speech from Gemini S2ST API:
-    - 24kHz sample rate (Gemini API output format)
-    - 16-bit PCM format
-    - Mono channel
-    - 1024 frame chunks for low latency
+    Accepts 24kHz audio from Gemini S2ST API and resamples to 48kHz
+    for macOS CoreAudio compatibility (macOS often rejects 24kHz).
 
     Example:
         ```python
@@ -392,27 +390,47 @@ class SpeakerOutput(BasePlaybackDevice):
         ```
     """
 
+    # macOS-safe playback rate; Gemini outputs 24kHz
+    PLAYBACK_RATE = 48000
+    INPUT_RATE = SAMPLE_RATE_OUTPUT  # 24kHz from Gemini
+
     def __init__(
         self,
         device_index: Optional[int] = None,
-        sample_rate: int = SAMPLE_RATE_OUTPUT,
         chunk_size: int = CHUNK_SIZE,
     ):
         """
         Initialize speaker output.
 
+        Plays at 48kHz (macOS-safe). Incoming 24kHz audio from Gemini
+        is resampled automatically in write_chunk().
+
         Args:
             device_index: PyAudio device index (None = default speakers)
-            sample_rate: Sample rate in Hz (default: 24kHz for Gemini output)
             chunk_size: Buffer size in frames (default: 1024)
         """
         super().__init__(
-            sample_rate=sample_rate,
+            sample_rate=self.PLAYBACK_RATE,
             chunk_size=chunk_size,
             channels=CHANNELS,
             device_index=device_index,
         )
-        logger.info("SpeakerOutput initialized")
+        logger.info("SpeakerOutput initialized (48kHz playback, 24kHz input)")
+
+    async def write_chunk(self, audio_data: bytes, timeout: Optional[float] = None) -> None:
+        """
+        Write audio data, resampling from 24kHz to 48kHz.
+
+        Args:
+            audio_data: Raw PCM audio bytes at 24kHz from Gemini
+            timeout: Maximum time to wait if queue is full
+        """
+        resampled = resample_audio(
+            audio_data,
+            original_rate=self.INPUT_RATE,
+            target_rate=self.PLAYBACK_RATE,
+        )
+        await super().write_chunk(resampled, timeout=timeout)
 
 
 class VirtualMicOutput(BasePlaybackDevice):
