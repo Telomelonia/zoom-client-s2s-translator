@@ -1,28 +1,51 @@
-# Real-Time Speech-to-Speech Translation for Zoom
-I want to build a Mac desktop app that provides live bidirectional translation for Zoom calls using Google's new Gemini Live API.
-## How it should work:
-Outgoing (your speech → Zoom):
+# Zoom Real-Time Speech-to-Speech Translator
 
-Captures microphone input
-Translates speech via Gemini Live API
-Routes translated audio to Zoom as a virtual microphone
+Live bidirectional translation for Zoom calls using Google Gemini S2ST.
 
-Incoming (Zoom → your ears):
+## Quick Start
 
-Captures audio output from Zoom participants
-Translates speech via Gemini Live API
-Plays translated audio back through your speakers/headphones
+### Prerequisites
+```bash
+brew install blackhole-2ch    # Virtual audio driver (reboot after install)
+pip install google-genai pyaudio numpy python-dotenv
+gcloud auth application-default login
+```
 
-Technical approach:
+### Setup .env
+```
+GOOGLE_CLOUD_PROJECT=your-project-id
+GEMINI_MODEL=gemini-live-2.5-flash-native-audio
+```
 
-Use virtual audio devices (like BlackHole) for system-level audio routing
-Leverage Gemini's real-time speech-to-speech translation API
-Build native Mac app for seamless integration
+### Zoom Audio Settings
+1. **Zoom > Settings > Audio > Microphone:** BlackHole 2ch
+2. **Zoom > Settings > Audio > Speaker:** BlackHole 2ch
 
-Why:
-Google demonstrated this technology for in-person conversations with AirPods, but no one has built a solution for remote video calls on desktop yet.
+### Run (CLI)
+```bash
+# Terminal 1: Your voice → Japanese → Zoom
+python3 translate.py upstream --target ja
 
-First STEP:
-- SETUP CLAUDE SKILLS AND SPECS AND PLUGIN
-gimme the best engineer
-- I think I will hire the gemini next year
+# Terminal 2: Zoom audio → English → Your speakers
+python3 translate.py downstream --target en --speaker-index 5
+```
+
+### Run (Electron UI)
+```bash
+cd electron && npm install && npm run dev
+```
+Select your mic and speaker, click Start.
+
+## How It Works
+```
+YOU SPEAK → Mic → Gemini S2ST → BlackHole → Zoom (partner hears Japanese)
+PARTNER SPEAKS → Zoom → BlackHole → Gemini S2ST → Speakers (you hear English)
+```
+
+## Supported Languages
+en, ja, es, fr, de, cmn, ko, hi, ar, pt, it, ru, nl, sv, pl, tr, vi, th + 80 more
+
+## Useful Commands
+```bash
+python3 translate.py --list-devices    # See audio device indices
+```
