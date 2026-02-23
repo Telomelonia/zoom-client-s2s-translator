@@ -56,14 +56,18 @@ ZOOM AUDIO → BlackHole → Gemini S2ST → Your Speakers (you hear translated 
 - [x] Created `tests/test_mic_to_speaker.py` — segmented sending with manual activity detection
 - [x] CLI with `--target`, `--duration`, `--mic-index`, `--speaker-index`, `--blackhole-index`, `--list-devices`
 
-### Remaining (Phase 5 - Packaging)
+### Remaining (Phase 5 - Polish & Packaging)
+- [ ] Silence detection for natural segment boundaries (fix abrupt audio cuts)
+- [ ] Investigate Gemini session reuse (why it freezes after first turn)
 - [ ] Add mode selector to UI (upstream/downstream toggle)
+- [ ] Auto-detect and configure BlackHole in UI
 - [ ] PyInstaller bundling for production
 - [ ] electron-builder DMG/EXE packaging
-- [ ] Auto-detect and configure BlackHole in UI
 
 ### Blockers
-- **BlackHole not visible in PyAudio** — installed via brew but kernel audio driver not loaded. Requires Mac reboot to activate. (Severity: Medium — expected to resolve after reboot)
+- ~~**BlackHole not visible in PyAudio**~~ — **RESOLVED** (2026-02-23, reboot fixed it, device visible at index 3)
+- **Gemini freezes after first response** — single session only translates one turn then stops responding. **Workaround:** reconnect-per-segment (new session every 5s). Works but causes abrupt audio cuts mid-sentence.
+- **Abrupt segment boundaries** — fixed 5-second segments cut speech mid-sentence. Needs silence detection to find natural pause points before ending a segment.
 
 ### Completed (Phase 2B - Audio Playback)
 - [x] Implement SpeakerOutput class (plays translated audio to speakers)
@@ -159,10 +163,10 @@ _None currently_
 | Project structure complete | Week 1 | ✅ Complete |
 | Audio capture pipeline (Phase 2A) | Week 2 | ✅ Complete (fd4334e) |
 | Audio playback pipeline (Phase 2B) | Week 2 | ✅ Complete |
-| Mic → Gemini → Speaker working | Week 3 | ✅ Code-complete (pending BlackHole verify) |
+| Mic → Gemini → Speaker working | Week 3 | ✅ Complete (verified 2026-02-23) |
 | System audio capture working | Week 3 | ✅ Complete |
-| Virtual mic routing working | Week 4 | ✅ Code-complete (pending BlackHole verify) |
-| Electron UI complete | Week 5 | Pending |
+| Virtual mic routing working | Week 4 | ✅ Complete (BlackHole verified) |
+| Electron UI complete | Week 5 | ✅ Complete (a8893b6) |
 | DMG/EXE builds working | Week 6 | Pending |
 | Beta release | Week 7 | Pending |
 
@@ -196,15 +200,18 @@ _None currently_
 ### Current Blockers
 | Date | Blocker | Severity | Status | Resolution |
 |------|---------|----------|--------|------------|
-| 2026-02-19 | BlackHole installed via brew but not visible in PyAudio device list. Kernel audio driver likely not loaded. | Medium | Pending reboot | Reboot Mac, verify in Audio MIDI Setup, then re-test `python3 translate.py --list-devices` |
+| 2026-02-19 | BlackHole not visible in PyAudio | Medium | ✅ Resolved | Reboot fixed it (2026-02-23) |
+| 2026-02-23 | Gemini freezes after first response in single session | High | Workaround | Reconnect per segment (new session every 5s) |
+| 2026-02-23 | Abrupt audio cuts at segment boundaries | Medium | Open | Need silence detection for natural pause points |
+| 2026-02-23 | Preview model (`*-preview-native-audio-09-2025`) stopped responding | High | ✅ Resolved | Switched to GA model `gemini-live-2.5-flash-native-audio` |
 
 ### Identified Risks
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| Gemini S2ST leaves preview | Medium | Have fallback to STT+Translate+TTS pipeline |
+| Gemini S2ST leaves preview | Medium | Already on GA model; fallback to STT+Translate+TTS pipeline |
 | Audio latency too high | Medium | Optimize chunk sizes, test different configs |
 | Virtual audio driver issues | Low | Support multiple drivers, provide setup guide |
-| BlackHole driver not loading after install | Medium | Reboot required; fallback: manual .pkg install from BlackHole releases |
+| Reconnect-per-segment adds latency | Medium | ~1-2s reconnect overhead per segment; investigate session reuse |
 
 ---
 

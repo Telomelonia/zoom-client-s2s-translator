@@ -113,7 +113,7 @@ All major decisions must be logged in PROJECT_STATUS.md with:
 **Last Completed:** Full Electron ↔ Python IPC wiring (server.py, PythonBridge, IPC handlers)
 **Progress:** 80%
 **API Status:** Gemini S2ST available (Private Preview, FREE) - connection verified
-**Blockers:** BlackHole not visible in PyAudio (needs Mac reboot for kernel driver)
+**Blockers:** Gemini freezes after first turn (workaround: reconnect per segment); abrupt 5s segment cuts need silence detection
 **Next:** Phase 5 — Packaging (PyInstaller, electron-builder, mode selector UI)
 
 ## Commands for Manager Agent
