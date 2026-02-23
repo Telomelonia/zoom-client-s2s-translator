@@ -109,11 +109,12 @@ All major decisions must be logged in PROJECT_STATUS.md with:
 - Alternatives considered
 
 ## Current Status
-**Phase:** Gemini Integration (Phase 3) - 80% complete
-**Last Completed:** Bidirectional translation CLI (`translate.py`) with upstream/downstream modes
-**Progress:** 65%
+**Phase:** Electron UI Integration (Phase 4) - COMPLETE
+**Last Completed:** Full Electron ↔ Python IPC wiring (server.py, PythonBridge, IPC handlers)
+**Progress:** 80%
 **API Status:** Gemini S2ST available (Private Preview, FREE) - connection verified
 **Blockers:** BlackHole not visible in PyAudio (needs Mac reboot for kernel driver)
+**Next:** Phase 5 — Packaging (PyInstaller, electron-builder, mode selector UI)
 
 ## Commands for Manager Agent
 When user says:

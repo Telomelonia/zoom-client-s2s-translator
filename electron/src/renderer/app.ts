@@ -5,7 +5,6 @@
  * Handles UI interactions and communication with main process.
  */
 
-// Type guard to ensure electronAPI is available
 if (!window.electronAPI) {
   throw new Error('electronAPI is not available');
 }
@@ -28,29 +27,54 @@ const elements = {
   stopButton: document.getElementById('stopButton') as HTMLButtonElement,
 };
 
-// Application state
 let isTranslating = false;
 
-/**
- * Initialize the application
- */
+// ── Error Banner ──────────────────────────────────────
+
+let errorBanner: HTMLDivElement | null = null;
+
+function showError(message: string): void {
+  // Remove existing banner
+  if (errorBanner) {
+    errorBanner.remove();
+  }
+
+  errorBanner = document.createElement('div');
+  errorBanner.className = 'error-banner';
+
+  const msgSpan = document.createElement('span');
+  msgSpan.textContent = message;
+  errorBanner.appendChild(msgSpan);
+
+  const dismissBtn = document.createElement('button');
+  dismissBtn.className = 'error-dismiss';
+  dismissBtn.textContent = '\u00d7';
+  dismissBtn.addEventListener('click', () => {
+    errorBanner?.remove();
+    errorBanner = null;
+  });
+  errorBanner.appendChild(dismissBtn);
+
+  // Insert at top of main
+  const main = document.querySelector('main')!;
+  main.insertBefore(errorBanner, main.firstChild);
+
+  // Auto-dismiss after 8 seconds
+  setTimeout(() => {
+    errorBanner?.remove();
+    errorBanner = null;
+  }, 8000);
+}
+
+// ── Init ──────────────────────────────────────────────
+
 async function initialize(): Promise<void> {
   try {
-    // Load audio devices
     await loadDevices();
-
-    // Load saved settings
     await loadSettings();
-
-    // Set up event listeners
     setupEventListeners();
-
-    // Subscribe to status updates
     electronAPI.onStatusUpdate(handleStatusUpdate);
-
-    // Subscribe to errors
     electronAPI.onError(handleError);
-
     console.log('Application initialized successfully');
   } catch (error) {
     console.error('Failed to initialize application:', error);
@@ -58,37 +82,23 @@ async function initialize(): Promise<void> {
   }
 }
 
-/**
- * Load available audio devices
- */
 async function loadDevices(): Promise<void> {
   try {
     const devices = await electronAPI.getDevices();
 
-    // Populate microphone dropdown
     elements.micDevice.innerHTML = devices.microphones
-      .map(
-        (device) =>
-          `<option value="${device.id}">${device.name}</option>`
-      )
+      .map((d) => `<option value="${d.id}">${d.name}</option>`)
       .join('');
 
-    // Populate speaker dropdown
     elements.speakerDevice.innerHTML = devices.speakers
-      .map(
-        (device) =>
-          `<option value="${device.id}">${device.name}</option>`
-      )
+      .map((d) => `<option value="${d.id}">${d.name}</option>`)
       .join('');
 
     if (devices.microphones.length === 0) {
-      elements.micDevice.innerHTML =
-        '<option value="">No microphones found</option>';
+      elements.micDevice.innerHTML = '<option value="">No microphones found</option>';
     }
-
     if (devices.speakers.length === 0) {
-      elements.speakerDevice.innerHTML =
-        '<option value="">No speakers found</option>';
+      elements.speakerDevice.innerHTML = '<option value="">No speakers found</option>';
     }
   } catch (error) {
     console.error('Failed to load devices:', error);
@@ -97,33 +107,18 @@ async function loadDevices(): Promise<void> {
   }
 }
 
-/**
- * Load saved settings
- */
 async function loadSettings(): Promise<void> {
   try {
     const settings = await electronAPI.getSettings();
-
-    if (settings.sourceLang) {
-      elements.sourceLang.value = settings.sourceLang as string;
-    }
-    if (settings.targetLang) {
-      elements.targetLang.value = settings.targetLang as string;
-    }
-    if (settings.micDevice) {
-      elements.micDevice.value = settings.micDevice as string;
-    }
-    if (settings.speakerDevice) {
-      elements.speakerDevice.value = settings.speakerDevice as string;
-    }
+    if (settings.sourceLang) elements.sourceLang.value = settings.sourceLang as string;
+    if (settings.targetLang) elements.targetLang.value = settings.targetLang as string;
+    if (settings.micDevice) elements.micDevice.value = settings.micDevice as string;
+    if (settings.speakerDevice) elements.speakerDevice.value = settings.speakerDevice as string;
   } catch (error) {
     console.error('Failed to load settings:', error);
   }
 }
 
-/**
- * Save current settings
- */
 async function saveSettings(): Promise<void> {
   try {
     await electronAPI.setSettings({
@@ -137,60 +132,42 @@ async function saveSettings(): Promise<void> {
   }
 }
 
-/**
- * Set up UI event listeners
- */
 function setupEventListeners(): void {
-  // Start translation
   elements.startButton.addEventListener('click', handleStart);
-
-  // Stop translation
   elements.stopButton.addEventListener('click', handleStop);
-
-  // Refresh devices
   elements.refreshDevices.addEventListener('click', loadDevices);
-
-  // Save settings on change
   elements.sourceLang.addEventListener('change', saveSettings);
   elements.targetLang.addEventListener('change', saveSettings);
   elements.micDevice.addEventListener('change', saveSettings);
   elements.speakerDevice.addEventListener('change', saveSettings);
 }
 
-/**
- * Handle start translation button click
- */
+// ── Translation Controls ──────────────────────────────
+
 async function handleStart(): Promise<void> {
-  if (isTranslating) {
-    return;
-  }
+  if (isTranslating) return;
 
   try {
-    // Validate configuration
     if (!elements.micDevice.value || !elements.speakerDevice.value) {
       showError('Please select audio devices');
       return;
     }
 
-    // Disable start button
     elements.startButton.disabled = true;
     elements.statusText.textContent = 'Starting...';
 
-    // Start translation
     await electronAPI.startTranslation({
+      mode: 'upstream',
       sourceLang: elements.sourceLang.value,
       targetLang: elements.targetLang.value,
       micDevice: elements.micDevice.value,
       speakerDevice: elements.speakerDevice.value,
     });
 
-    // Update UI state
     isTranslating = true;
     elements.stopButton.disabled = false;
     elements.statusIndicator.classList.add('active');
     elements.statusText.textContent = 'Translating';
-
-    // Disable config changes during translation
     setConfigEnabled(false);
   } catch (error) {
     console.error('Failed to start translation:', error);
@@ -200,13 +177,8 @@ async function handleStart(): Promise<void> {
   }
 }
 
-/**
- * Handle stop translation button click
- */
 async function handleStop(): Promise<void> {
-  if (!isTranslating) {
-    return;
-  }
+  if (!isTranslating) return;
 
   try {
     elements.stopButton.disabled = true;
@@ -214,18 +186,15 @@ async function handleStop(): Promise<void> {
 
     await electronAPI.stopTranslation();
 
-    // Update UI state
     isTranslating = false;
     elements.startButton.disabled = false;
     elements.statusIndicator.classList.remove('active');
     elements.statusText.textContent = 'Idle';
 
-    // Reset status displays
     elements.incomingStatus.textContent = '--';
     elements.outgoingStatus.textContent = '--';
-    elements.latencyValue.textContent = '-- ms';
+    elements.latencyValue.textContent = '--';
 
-    // Re-enable config changes
     setConfigEnabled(true);
   } catch (error) {
     console.error('Failed to stop translation:', error);
@@ -234,50 +203,37 @@ async function handleStop(): Promise<void> {
   }
 }
 
-/**
- * Handle translation status updates
- */
+// ── Status Updates ────────────────────────────────────
+
 function handleStatusUpdate(status: {
   isActive: boolean;
-  incoming: { connected: boolean; latency: number };
-  outgoing: { connected: boolean; latency: number };
+  chunksSent: number;
+  chunksReceived: number;
+  chunksPlayed: number;
+  backlog: number;
 }): void {
-  // Update incoming status
-  elements.incomingStatus.textContent = status.incoming.connected
-    ? 'Connected'
-    : 'Disconnected';
+  if (!status.isActive && isTranslating) {
+    // Translation stopped from Python side
+    isTranslating = false;
+    elements.startButton.disabled = false;
+    elements.stopButton.disabled = true;
+    elements.statusIndicator.classList.remove('active');
+    elements.statusText.textContent = 'Idle';
+    setConfigEnabled(true);
+  }
 
-  // Update outgoing status
-  elements.outgoingStatus.textContent = status.outgoing.connected
-    ? 'Connected'
-    : 'Disconnected';
-
-  // Update latency (average of incoming and outgoing)
-  const avgLatency = Math.round(
-    (status.incoming.latency + status.outgoing.latency) / 2
-  );
-  elements.latencyValue.textContent = `${avgLatency} ms`;
+  elements.incomingStatus.textContent = `Sent: ${status.chunksSent}`;
+  elements.outgoingStatus.textContent = `Recv: ${status.chunksReceived}`;
+  elements.latencyValue.textContent = status.backlog > 0
+    ? `Backlog: ${status.backlog}`
+    : `Played: ${status.chunksPlayed}`;
 }
 
-/**
- * Handle error events
- */
 function handleError(error: { code: string; message: string }): void {
   console.error('Application error:', error);
   showError(error.message);
 }
 
-/**
- * Show error message to user
- */
-function showError(message: string): void {
-  // TODO: Implement proper error notification UI
-  alert(`Error: ${message}`);
-}
-
-/**
- * Enable or disable configuration controls
- */
 function setConfigEnabled(enabled: boolean): void {
   elements.sourceLang.disabled = !enabled;
   elements.targetLang.disabled = !enabled;

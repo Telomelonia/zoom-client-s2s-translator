@@ -8,6 +8,7 @@
  * Translation configuration passed from renderer to main
  */
 export interface TranslationConfig {
+  mode: 'upstream' | 'downstream';
   sourceLang: string;
   targetLang: string;
   micDevice: string;
@@ -19,14 +20,10 @@ export interface TranslationConfig {
  */
 export interface TranslationStatus {
   isActive: boolean;
-  incoming: {
-    connected: boolean;
-    latency: number;
-  };
-  outgoing: {
-    connected: boolean;
-    latency: number;
-  };
+  chunksSent: number;
+  chunksReceived: number;
+  chunksPlayed: number;
+  backlog: number;
 }
 
 /**
@@ -113,3 +110,21 @@ export const LANGUAGES: readonly Language[] = [
   { code: 'ar', name: 'Arabic', nativeName: 'العربية' },
   { code: 'pt', name: 'Portuguese', nativeName: 'Português' },
 ] as const;
+
+/**
+ * Python JSON protocol types
+ */
+export type PythonCommand =
+  | { cmd: 'ping' }
+  | { cmd: 'list_devices' }
+  | { cmd: 'start'; mode: string; target: string; mic_index: number | null; speaker_index: number | null; blackhole_index: number | null; segment: number }
+  | { cmd: 'stop' };
+
+export type PythonMessage =
+  | { type: 'ready' }
+  | { type: 'pong' }
+  | { type: 'devices'; inputs: { index: number; name: string }[]; outputs: { index: number; name: string }[] }
+  | { type: 'started'; mode: string; target: string }
+  | { type: 'status'; chunks_sent: number; chunks_received: number; chunks_played: number; backlog: number }
+  | { type: 'stopped'; chunks_sent: number; chunks_received: number; chunks_played: number }
+  | { type: 'error'; message: string };
